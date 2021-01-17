@@ -42,9 +42,11 @@ func NewNote(noteStr string) (Note, error) {
 		}
 		switch sharpFlat {
 		case 's':
+			note++
 		case '#':
 			note++
 		case 'f':
+			note--
 		case 'b':
 			note--
 		default:
@@ -69,21 +71,39 @@ type Keyboard struct {
 	keyHeight   float32
 	borderWidth float32
 
-	black color.Color
-	white color.Color
+	blackColor  color.Color
+	whiteColor  color.Color
+	borderColor color.Color
 
 	cached *ebiten.Image
 
 	mu sync.Mutex
 }
 
+func NewKeyboard(keyWidth float32, keyHeight float32) *Keyboard {
+	return &Keyboard{
+		keyWidth:    keyWidth,
+		keyHeight:   keyHeight,
+		borderWidth: 2,
+
+		whiteColor:  color.RGBA{0xfd, 0xe5, 0xe5, 0xff},
+		blackColor:  color.RGBA{0x2e, 0x21, 0x21, 0xff},
+		borderColor: color.Black,
+	}
+}
+
 func (kb *Keyboard) SetRange(min Note, max Note) {
 	kb.mu.Lock()
 	defer kb.mu.Unlock()
 
-	kb.min = min
-	kb.max = max
-	kb.cached = nil
+	if kb.min != min {
+		kb.min = min
+		kb.cached = nil
+	}
+	if kb.max != max {
+		kb.max = max
+		kb.cached = nil
+	}
 }
 
 func (kb *Keyboard) getCached() *ebiten.Image {
@@ -96,11 +116,13 @@ func (kb *Keyboard) getCached() *ebiten.Image {
 			int(kb.keyHeight),
 		)
 
+		kb.cached.Fill(kb.borderColor)
+
 		whiteOp := &vector.FillOptions{
-			Color: kb.white,
+			Color: kb.whiteColor,
 		}
 		blackOp := &vector.FillOptions{
-			Color: kb.black,
+			Color: kb.blackColor,
 		}
 
 		halfBorder := kb.borderWidth / 2
@@ -157,6 +179,6 @@ func (kb *Keyboard) getCached() *ebiten.Image {
 	return kb.cached
 }
 
-func (kb *Keyboard) Draw(image *ebiten.Image) {
-	image.DrawImage(kb.getCached(), &ebiten.DrawImageOptions{})
+func (kb *Keyboard) Draw(image *ebiten.Image, op *ebiten.DrawImageOptions) {
+	image.DrawImage(kb.getCached(), op)
 }

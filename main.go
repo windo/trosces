@@ -1,13 +1,14 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
-	"image/color"
 	"log"
 	"math/rand"
 	"os"
 	"runtime/pprof"
+	"runtime/trace"
 	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
@@ -18,13 +19,14 @@ import (
 var (
 	simulateInput = flag.Bool("simulate-input", false, "Simulate random input being received")
 	cpuProfile    = flag.String("cpu-profile", "", "Path to CPU profile to be written")
+	memProfile    = flag.String("mem-profile", "", "Path to memory profile to be written")
+	traceFile     = flag.String("trace-file", "", "Path to trace file to be written")
+	oscAddr       = flag.String("osc-addr", "127.0.0.1:8765", "UDP IP:port to listen for OSC messages")
 )
 
 type Game struct {
 	keyboard *Keyboard
 	track    *Track
-
-	stop chan struct{}
 }
 
 type Finished struct{}
@@ -32,15 +34,18 @@ type Finished struct{}
 func (f Finished) Error() string { return "Game finished" }
 
 func (g *Game) Update() error {
-	log.Printf("FPS=%.1f TPS=%.1f", ebiten.CurrentFPS(), ebiten.CurrentTPS())
+	_, task := trace.NewTask(context.Background(), "UpdateGame")
+	defer task.End()
+
+	// Maybe inject some synthetic events.
 	if *simulateInput {
-		if rand.Float32() < 0.05 {
+		if rand.Float32() < 0.1 {
 			base, err := NewNote("c4")
 			if err != nil {
 				log.Fatalf("Could not parse note: %v", err)
 			}
-			note := base + Note(rand.Intn(12))
-			g.track.Trace(
+			note := base + Note(rand.Intn(36))
+			g.track.Span(
 				rand.Intn(7),
 				int(note),
 				time.Duration(rand.Float32()*float32(time.Second)),
@@ -48,30 +53,37 @@ func (g *Game) Update() error {
 		}
 	}
 
-	if int(g.keyboard.min) != g.track.minPos {
-		g.keyboard.min = Note(g.track.minPos)
-		g.keyboard.cached = nil
+	// Keyboard matches the track.
+	g.keyboard.SetRange(Note(g.track.minPos), Note(g.track.maxPos))
+
+	// Grid steps
+	if inpututil.IsKeyJustPressed(ebiten.Key3) {
+		g.track.SetGridSteps(3)
 	}
-	if int(g.keyboard.max) != g.track.maxPos {
-		g.keyboard.max = Note(g.track.maxPos)
-		g.keyboard.cached = nil
+	if inpututil.IsKeyJustPressed(ebiten.Key4) {
+		g.track.SetGridSteps(4)
+	}
+	if inpututil.IsKeyJustPressed(ebiten.Key5) {
+		g.track.SetGridSteps(5)
 	}
 
-	select {
-	case <-g.stop:
-		return Finished{}
-	default:
-	}
-	if inpututil.IsKeyJustPressed(ebiten.KeyQ) {
+	// Maybe finish.
+	if inpututil.IsKeyJustPressed(ebiten.KeyQ) || inpututil.IsKeyJustPressed(ebiten.KeyEscape) {
 		return Finished{}
 	}
+
 	return nil
 }
 
 func (g *Game) Draw(screen *ebiten.Image) {
-	screen.Fill(color.Black)
-	g.keyboard.Draw(screen)
-	g.track.Draw(screen)
+	ctxt, task := trace.NewTask(context.Background(), "DrawGame")
+	defer task.End()
+
+	//screen.Fill(color.Black)
+	trackOp := ebiten.DrawImageOptions{}
+	trackOp.GeoM.Translate(0, float64(g.keyboard.keyHeight))
+	g.track.Draw(ctxt, screen, &trackOp)
+	g.keyboard.Draw(screen, &ebiten.DrawImageOptions{})
 }
 
 func (g *Game) Layout(outsideWidth, outsideHeight int) (int, int) {
@@ -84,78 +96,80 @@ func main() {
 	if *cpuProfile != "" {
 		f, err := os.Create(*cpuProfile)
 		if err != nil {
-			log.Fatal("Could not create CPU profile: ", err)
+			log.Fatal("Could not create CPU profile file: ", err)
 		}
-		defer f.Close() // error handling omitted for example
+		defer f.Close()
 		if err := pprof.StartCPUProfile(f); err != nil {
 			log.Fatal("Could not start CPU profile: ", err)
 		}
 		defer pprof.StopCPUProfile()
 	}
+	if *traceFile != "" {
+		f, err := os.Create(*traceFile)
+		if err != nil {
+			log.Fatal("Could not create trace file: ", err)
+		}
+		defer f.Close()
+		if err := trace.Start(f); err != nil {
+			log.Fatal("Could not start tracing: ", err)
+		}
+		defer trace.Stop()
+	}
 
 	g := &Game{
-		keyboard: &Keyboard{
-			min:         Note(40),
-			max:         Note(50),
-			keyWidth:    14,
-			keyHeight:   20,
-			borderWidth: 2,
-			white:       color.RGBA{0xfd, 0xe5, 0xe5, 0xff},
-			black:       color.RGBA{0x2e, 0x21, 0x21, 0xff},
-		},
-		track: NewTrack(64, 8*time.Second),
-		stop:  make(chan struct{}),
+		keyboard: NewKeyboard(14, 20),
+		track:    NewTrack(256, 4*time.Second),
 	}
-	ebiten.SetWindowTitle("TrOSCes")
-	ebiten.SetWindowResizable(true)
 
-	addr := "127.0.0.1:8765"
 	d := osc.NewStandardDispatcher()
+
 	d.AddMsgHandler("/play", func(msg *osc.Message) {
-		if len(msg.Arguments) < 2 {
-			log.Printf("Too few arguments for /play")
+		if len(msg.Arguments) < 2 || len(msg.Arguments) > 3 {
+			log.Printf("Expected 2 or 3 arguments for /play, got: %d", len(msg.Arguments))
 			return
 		}
-		if len(msg.Arguments) > 3 {
-			log.Printf("Too many arguments for /play")
-			return
-		}
-		instrument32, ok := msg.Arguments[0].(int32)
-		if !ok {
+
+		var (
+			note       Note
+			duration   time.Duration
+			instrument int
+		)
+
+		if instrument32, ok := msg.Arguments[0].(int32); !ok {
 			log.Printf("First /play argument not an integer")
 			return
+		} else {
+			instrument = int(instrument32)
 		}
-		instrument := int(instrument32)
-		noteStr, ok := msg.Arguments[1].(string)
-		if !ok {
+
+		if noteStr, ok := msg.Arguments[1].(string); !ok {
 			log.Printf("Second /play argument not a string")
 			return
-		}
-		note, err := NewNote(noteStr)
-		if err != nil {
-			log.Printf("Second /play argument not a note: %v", err)
-			return
-		}
-		var d time.Duration
-		if len(msg.Arguments) == 3 {
-			f32, ok := msg.Arguments[2].(float32)
-			if !ok {
-				f64, ok := msg.Arguments[2].(float64)
-				if !ok {
-					log.Printf("Third /play argument not a float")
-					return
-
-				} else {
-					d = time.Duration(f64 * float64(time.Second))
-				}
-			} else {
-				d = time.Duration(f32 * float32(time.Second))
+		} else {
+			var err error
+			if note, err = NewNote(noteStr); err != nil {
+				log.Printf("Second /play argument not a note: %v", err)
+				return
 			}
 		}
-		g.track.Trace(instrument, int(note), d)
+
+		if len(msg.Arguments) == 3 {
+			if f32, ok := msg.Arguments[2].(float32); !ok {
+				if f64, ok := msg.Arguments[2].(float64); !ok {
+					log.Printf("Third /play argument not a float")
+					return
+				} else {
+					duration = time.Duration(f64 * float64(time.Second))
+				}
+			} else {
+				duration = time.Duration(f32 * float32(time.Second))
+			}
+		}
+
+		g.track.Span(instrument, int(note), duration)
 	})
 	server := &osc.Server{
-		Addr:       addr,
+		Addr:       *oscAddr,
 		Dispatcher: d,
 	}
 
@@ -165,8 +179,24 @@ func main() {
 		}
 	}()
 
+	ebiten.SetWindowTitle("TrOSCes")
+	ebiten.SetWindowResizable(true)
+	//ebiten.SetScreenClearedEveryFrame(false)
+	ebiten.SetMaxTPS(15)
+
 	err := ebiten.RunGame(g)
 	if err != nil && !errors.Is(err, Finished{}) {
 		log.Fatal(err)
+	}
+
+	if *memProfile != "" {
+		f, err := os.Create(*memProfile)
+		if err != nil {
+			log.Fatal("Could not create memory profile file: ", err)
+		}
+		defer f.Close()
+		if err := pprof.WriteHeapProfile(f); err != nil {
+			log.Fatal("Could not write memory profile: ", err)
+		}
 	}
 }

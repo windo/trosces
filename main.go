@@ -182,7 +182,7 @@ func main() {
 	ebiten.SetWindowTitle("TrOSCes")
 	ebiten.SetWindowResizable(true)
 	//ebiten.SetScreenClearedEveryFrame(false)
-	ebiten.SetMaxTPS(15)
+	//ebiten.SetMaxTPS(60)
 
 	err := ebiten.RunGame(g)
 	if err != nil && !errors.Is(err, Finished{}) {

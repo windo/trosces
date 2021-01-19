@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
 	"time"
 
@@ -12,125 +13,168 @@ var (
 	oscAddr = flag.String("osc-addr", "127.0.0.1:8765", "UDP IP:port to listen for OSC messages")
 )
 
+func CheckArgs(args []interface{}, min int, max int) error {
+	if len(args) < min || len(args) > max {
+		return fmt.Errorf("expected %d to %d arguments, got: %d", min, max, len(args))
+	}
+	return nil
+}
+
+func NameArg(arg interface{}) (string, error) {
+	if name, ok := arg.(string); ok {
+		return name, nil
+	} else {
+		return "", fmt.Errorf("not a string")
+	}
+}
+
+func NoteArg(arg interface{}) (Note, error) {
+	if name, err := NameArg(arg); err != nil {
+		return 0, err
+	} else {
+		if note, err := NewNote(name); err != nil {
+			return 0, err
+		} else {
+			return note, nil
+		}
+	}
+}
+
+func NumberArg(arg interface{}) (int, error) {
+	if i32, ok := arg.(int32); !ok {
+		return 0, fmt.Errorf("not an integer")
+	} else {
+		return int(i32), nil
+	}
+}
+
+func DurationArg(arg interface{}) (time.Duration, error) {
+	if f32, ok := arg.(float32); !ok {
+		if f64, ok := arg.(float64); !ok {
+			if i, err := NumberArg(arg); err != nil {
+				return 0, fmt.Errorf("not a number")
+			} else {
+				return time.Duration(int64(i) * int64(time.Second)), nil
+			}
+		} else {
+			return time.Duration(f64 * float64(time.Second)), nil
+		}
+	} else {
+		return time.Duration(f32 * float32(time.Second)), nil
+	}
+}
+
 func LaunchOSCServer(trosces *Trosces) {
 	d := osc.NewStandardDispatcher()
 
 	d.AddMsgHandler("/play", func(msg *osc.Message) {
-		if len(msg.Arguments) < 2 || len(msg.Arguments) > 3 {
-			log.Printf("Expected 2 or 3 arguments for /play, got: %d", len(msg.Arguments))
+		var err error
+		if err = CheckArgs(msg.Arguments, 2, 3); err != nil {
+			log.Printf("Invalid /play: %v", err)
 			return
 		}
 
 		var (
+			instrument string
 			note       Note
 			duration   time.Duration
-			instrument int
 		)
 
-		if instrument32, ok := msg.Arguments[0].(int32); !ok {
-			log.Printf("First /play argument not an integer")
+		if instrument, err = NameArg(msg.Arguments[0]); err != nil {
+			log.Printf("Invalid /play[0] instrument: %v", err)
 			return
-		} else {
-			instrument = int(instrument32)
 		}
 
-		if noteStr, ok := msg.Arguments[1].(string); !ok {
-			log.Printf("Second /play argument not a string")
+		if note, err = NoteArg(msg.Arguments[1]); err != nil {
+			log.Printf("Invalid /play[1] note: %v", err)
 			return
-		} else {
-			var err error
-			if note, err = NewNote(noteStr); err != nil {
-				log.Printf("Second /play argument not a note: %v", err)
+		}
+
+		if len(msg.Arguments) == 3 {
+			if duration, err = DurationArg(msg.Arguments[2]); err != nil {
+				log.Printf("Invalid /play[2] duration: %v", err)
 				return
 			}
 		}
 
-		if len(msg.Arguments) == 3 {
-			if f32, ok := msg.Arguments[2].(float32); !ok {
-				if f64, ok := msg.Arguments[2].(float64); !ok {
-					log.Printf("Third /play argument not a float")
-					return
-				} else {
-					duration = time.Duration(f64 * float64(time.Second))
-				}
-			} else {
-				duration = time.Duration(f32 * float32(time.Second))
-			}
-		}
-
-		trosces.keyboard.trail.Span(instrument, int(note), duration)
+		trosces.PlayNote(instrument, note, duration)
 	})
 
 	d.AddMsgHandler("/drum", func(msg *osc.Message) {
-		if len(msg.Arguments) < 1 || len(msg.Arguments) > 2 {
-			log.Printf("Expected 1 or 2 arguments for /drum, got: %d", len(msg.Arguments))
+		var err error
+		if err = CheckArgs(msg.Arguments, 1, 2); err != nil {
+			log.Printf("Invalid /drum: %v", err)
 			return
 		}
 
 		var (
-			instrument int
+			instrument string
 			duration   time.Duration
 		)
 
-		if instrument32, ok := msg.Arguments[0].(int32); !ok {
-			log.Printf("First /drum argument not an integer")
+		if instrument, err = NameArg(msg.Arguments[0]); err != nil {
+			log.Printf("Invalid /drum[0] instrument: %v", err)
 			return
-		} else {
-			instrument = int(instrument32)
 		}
 
 		if len(msg.Arguments) == 2 {
-			if f32, ok := msg.Arguments[1].(float32); !ok {
-				if f64, ok := msg.Arguments[1].(float64); !ok {
-					log.Printf("Third /drum argument not a float")
-					return
-				} else {
-					duration = time.Duration(f64 * float64(time.Second))
-				}
-			} else {
-				duration = time.Duration(f32 * float32(time.Second))
+			if duration, err = DurationArg(msg.Arguments[1]); err != nil {
+				log.Printf("Invalid /drum[1] duration: %v", err)
+				return
 			}
 		}
 
-		trosces.drums.trail.Span(instrument, instrument, duration)
+		trosces.PlayDrum(instrument, duration)
 	})
 
 	d.AddMsgHandler("/layer", func(msg *osc.Message) {
-		if len(msg.Arguments) < 1 || len(msg.Arguments) > 2 {
-			log.Printf("Expected 1 or 2 arguments for /layer, got: %d", len(msg.Arguments))
+		var err error
+		if err = CheckArgs(msg.Arguments, 2, 3); err != nil {
+			log.Printf("Invalid /layer: %v", err)
 			return
 		}
 
 		var (
-			instrument int
-			duration   time.Duration
+			name     string
+			duration time.Duration
+			variant  string
 		)
 
-		if instrument32, ok := msg.Arguments[0].(int32); !ok {
-			log.Printf("First /layerargument not an integer")
+		if name, err = NameArg(msg.Arguments[0]); err != nil {
+			log.Printf("Invalid /layer[0] name: %v", err)
 			return
-		} else {
-			instrument = int(instrument32)
 		}
 
-		if len(msg.Arguments) == 2 {
-			if f32, ok := msg.Arguments[1].(float32); !ok {
-				if f64, ok := msg.Arguments[1].(float64); !ok {
-					log.Printf("Third /layer argument not a float")
-					return
-				} else {
-					duration = time.Duration(f64 * float64(time.Second))
-				}
-			} else {
-				duration = time.Duration(f32 * float32(time.Second))
+		if duration, err = DurationArg(msg.Arguments[1]); err != nil {
+			log.Printf("Invalid /layer[1] duration: %v", err)
+			return
+		}
+
+		if len(msg.Arguments) == 3 {
+			if variant, err = NameArg(msg.Arguments[2]); err != nil {
+				log.Printf("Invalid /layer[2] variant: %v", err)
+				return
 			}
 		}
 
-		trosces.layers.trail.Span(0, instrument, duration)
+		trosces.PlayLayer(name, duration, variant)
 	})
 
 	d.AddMsgHandler("/sync", func(msg *osc.Message) {
-		log.Printf("Sync/beats not implemented")
+		var err error
+		if err = CheckArgs(msg.Arguments, 1, 1); err != nil {
+			log.Printf("Invalid /sync: %v", err)
+			return
+		}
+
+		var bpm int
+
+		if bpm, err = NumberArg(msg.Arguments[0]); err != nil {
+			log.Printf("Invalid /sync[0] bpm: %v", err)
+			return
+		}
+
+		trosces.Sync(bpm)
 	})
 
 	server := &osc.Server{

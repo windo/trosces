@@ -11,40 +11,10 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
 )
 
-type Trosces struct {
-	keyboard *Track
-	drums    *Track
-	layers   *Track
-}
-
-func NewTrosces() *Trosces {
-	log.Printf("Creating new Trosces")
-	trosces := &Trosces{
-		keyboard: &Track{
-			header: NewHeader(15, 30),
-			trail:  NewTrail(time.Second, 4*time.Second, 256, 15),
-		},
-		drums: &Track{
-			header: NewHeader(30, 30),
-			trail:  NewTrail(time.Second, 4*time.Second, 256, 30),
-		},
-		layers: &Track{
-			header: NewHeader(30, 30),
-			trail:  NewTrail(8*time.Second, 120*time.Second, 8, 30),
-		},
-	}
-	trosces.keyboard.header.keyboard = true
-	trosces.drums.header.borderWidth = 2
-	trosces.drums.trail.borderWidth = 2
-	trosces.layers.header.borderWidth = 2
-	trosces.layers.trail.borderWidth = 2
-
-	return trosces
-}
-
 type Track struct {
 	header *Header
 	trail  *Trail
+	mapper *Mapper
 }
 
 func (track *Track) Resolve() {
@@ -64,6 +34,100 @@ func (track *Track) Width() float32 {
 }
 
 var Finished = errors.New("Trosces finished")
+
+type Mapper struct {
+	nameToId map[string]int
+	nextId   int
+}
+
+func NewMapper() *Mapper {
+	return &Mapper{
+		nameToId: map[string]int{},
+		nextId:   0,
+	}
+}
+
+func (m *Mapper) Get(name string) int {
+	if i, ok := m.nameToId[name]; ok {
+		return i
+	} else {
+		m.nameToId[name] = m.nextId
+		m.nextId++
+		return m.nameToId[name]
+	}
+}
+
+type Trosces struct {
+	keyboard *Track
+	drums    *Track
+	layers   *Track
+
+	variantMappers map[int]*Mapper
+}
+
+func NewTrosces() *Trosces {
+	log.Printf("Creating new Trosces")
+	trosces := &Trosces{
+		keyboard: &Track{
+			header: NewHeader(15, 30),
+			trail:  NewTrail(time.Second, 4*time.Second, 256, 15),
+			mapper: NewMapper(),
+		},
+		drums: &Track{
+			header: NewHeader(30, 30),
+			trail:  NewTrail(time.Second, 4*time.Second, 256, 30),
+			mapper: NewMapper(),
+		},
+		layers: &Track{
+			header: NewHeader(30, 30),
+			trail:  NewTrail(8*time.Second, 120*time.Second, 8, 30),
+			mapper: NewMapper(),
+		},
+		variantMappers: map[int]*Mapper{},
+	}
+	trosces.keyboard.header.keyboard = true
+	trosces.drums.header.borderWidth = 2
+	trosces.drums.trail.borderWidth = 2
+	trosces.layers.header.borderWidth = 2
+	trosces.layers.trail.borderWidth = 2
+
+	return trosces
+}
+
+// Events from OSC.
+
+func (trosces *Trosces) PlayNote(instrument string, note Note, duration time.Duration) {
+	iNum := trosces.keyboard.mapper.Get(instrument)
+	if duration == 0 {
+		// "forever"
+		duration = 24 * time.Hour
+	}
+	trosces.keyboard.trail.Span(iNum, int(note), duration)
+}
+
+func (trosces *Trosces) PlayDrum(instrument string, duration time.Duration) {
+	iNum := trosces.drums.mapper.Get(instrument)
+	if duration == 0 {
+		// short hit
+		duration = time.Second / 8
+	}
+	trosces.drums.trail.Span(iNum, iNum, duration)
+}
+
+func (trosces *Trosces) PlayLayer(name string, duration time.Duration, variant string) {
+	lNum := trosces.layers.mapper.Get(name)
+	if _, ok := trosces.variantMappers[lNum]; !ok {
+		trosces.variantMappers[lNum] = NewMapper()
+	}
+	vNum := trosces.variantMappers[lNum].Get(variant)
+	trosces.layers.trail.Span(vNum, lNum, duration)
+}
+
+func (trosces *Trosces) Sync(bpm int) {
+	// TODO: unimplemented
+}
+
+// Implements ebiten.Game interface.
 
 func (trosces *Trosces) Update() error {
 	_, task := trace.NewTask(context.Background(), "UpdateTrosces")

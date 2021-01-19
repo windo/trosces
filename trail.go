@@ -7,6 +7,7 @@ import (
 	"log"
 	"math"
 	"runtime/trace"
+	"sort"
 	"sync"
 	"time"
 
@@ -88,7 +89,7 @@ func (bucket *SpanBucket) Validate() error {
 	return nil
 }
 
-type Track struct {
+type Trail struct {
 	// Spans bucketed by periods of duration `bucketSize`
 	buckets map[time.Time]*SpanBucket
 
@@ -114,9 +115,9 @@ type Track struct {
 	mu sync.Mutex
 }
 
-func NewTrack(secondSize float32, length time.Duration) *Track {
-	log.Printf("New track")
-	track := Track{
+func NewTrail(secondSize float32, length time.Duration) *Trail {
+	log.Printf("New trail")
+	trail := Trail{
 		buckets: map[time.Time]*SpanBucket{},
 
 		cached:      map[time.Time]*ebiten.Image{},
@@ -138,36 +139,36 @@ func NewTrack(secondSize float32, length time.Duration) *Track {
 		ticker := time.NewTicker(5 * time.Second)
 		for {
 			<-ticker.C
-			track.cleanup()
+			trail.cleanup()
 		}
 	}()
 
-	return &track
+	return &trail
 }
 
-func (track *Track) Span(id int, pos int, d time.Duration) {
+func (trail *Trail) Span(id int, pos int, d time.Duration) {
 	defer trace.StartRegion(context.Background(), "NewSpan").End()
 	now := time.Now()
-	bucketTime := now.Truncate(track.bucketSize)
+	bucketTime := now.Truncate(trail.bucketSize)
 
 	if id >= len(spanPalette) {
 		log.Printf("Instrument ID %d too big, wrapping around", id)
 		id %= len(spanPalette)
 	}
 
-	track.mu.Lock()
-	defer track.mu.Unlock()
+	trail.mu.Lock()
+	defer trail.mu.Unlock()
 
-	if len(track.buckets) == 0 {
-		track.minPos = pos
-		track.maxPos = pos
-		track.resetAll()
-	} else if pos < track.minPos {
-		track.minPos = pos
-		track.resetAll()
-	} else if pos > track.maxPos {
-		track.maxPos = pos
-		track.resetAll()
+	if len(trail.buckets) == 0 {
+		trail.minPos = pos
+		trail.maxPos = pos
+		trail.resetAll()
+	} else if pos < trail.minPos {
+		trail.minPos = pos
+		trail.resetAll()
+	} else if pos > trail.maxPos {
+		trail.maxPos = pos
+		trail.resetAll()
 	}
 
 	span := &Span{
@@ -179,38 +180,38 @@ func (track *Track) Span(id int, pos int, d time.Duration) {
 	//log.Printf("New span: %s", span.String())
 
 	var bucket *SpanBucket
-	if track.buckets[bucketTime] == nil {
+	if trail.buckets[bucketTime] == nil {
 		bucket = &SpanBucket{
 			start: bucketTime,
 			end:   span.end,
 		}
-		track.buckets[bucketTime] = bucket
+		trail.buckets[bucketTime] = bucket
 	} else {
-		bucket = track.buckets[bucketTime]
+		bucket = trail.buckets[bucketTime]
 		if span.end.After(bucket.end) {
 			bucket.end = span.end
 		}
 	}
 
 	// Invalidate cached bucket image
-	track.redrawBucket(bucketTime)
+	trail.redrawBucket(bucketTime)
 	bucket.spans = append(bucket.spans, span)
 }
 
-func (track *Track) Stop(id int, pos int) {
+func (trail *Trail) Stop(id int, pos int) {
 	defer trace.StartRegion(context.Background(), "StopSpan").End()
 	now := time.Now()
-	track.mu.Lock()
-	defer track.mu.Unlock()
+	trail.mu.Lock()
+	defer trail.mu.Unlock()
 
-	for _, bucket := range track.buckets {
+	for _, bucket := range trail.buckets {
 		if bucket.end.Before(now) {
 			continue
 		}
 		for _, span := range bucket.spans {
 			if span.id == id && span.pos == pos && span.end.After(now) {
 				span.end = now
-				track.redrawBucket(now.Truncate(track.bucketSize))
+				trail.redrawBucket(now.Truncate(trail.bucketSize))
 				defer bucket.UpdateEnd()
 				return
 			}
@@ -218,52 +219,78 @@ func (track *Track) Stop(id int, pos int) {
 	}
 }
 
-func (track *Track) SetGridSteps(steps int) {
-	track.mu.Lock()
-	defer track.mu.Unlock()
+func (trail *Trail) SetGridSteps(steps int) {
+	trail.mu.Lock()
+	defer trail.mu.Unlock()
 
-	track.gridSteps = steps
-	track.redrawAll()
+	trail.gridSteps = steps
+	trail.redrawAll()
 }
 
-// Draw all the track components.
-func (track *Track) Draw(ctxt context.Context, image *ebiten.Image, op *ebiten.DrawImageOptions) {
-	defer trace.StartRegion(ctxt, "DrawTrack").End()
+func (trail *Trail) ActivePos() []int {
+	trail.mu.Lock()
+	defer trail.mu.Unlock()
+
+	now := time.Now()
+	activeMap := map[int]struct{}{}
+	active := []int{}
+
+	for _, bucket := range trail.buckets {
+		if !bucket.InRange(now, now) {
+			continue
+		}
+		for _, span := range bucket.spans {
+			if !span.InRange(now, now) {
+				continue
+			}
+			if _, ok := activeMap[span.pos]; !ok {
+				activeMap[span.pos] = struct{}{}
+				active = append(active, span.pos)
+			}
+		}
+	}
+	sort.Ints(active)
+	return active
+}
+
+// Draw all the trail components.
+func (trail *Trail) Draw(ctxt context.Context, image *ebiten.Image, op *ebiten.DrawImageOptions) {
+	defer trace.StartRegion(ctxt, "DrawTrail").End()
 	now := time.Now()
 
 	// History (time < now) flows away from 0.
 
 	// Bucket covering now, extensing at most bucketSize to the future
-	bucketTime := now.Truncate(track.bucketSize)
-	// End of the scroll track
-	trackEnd := now.Add(-track.length)
+	bucketTime := now.Truncate(trail.bucketSize)
+	// End of the scroll trail
+	trailEnd := now.Add(-trail.length)
 
-	// Until we find a bucket that covers the end of the track
-	for bucketTime.After(trackEnd) {
+	// Until we find a bucket that covers the end of the trail
+	for bucketTime.After(trailEnd) {
 		bucketOp := ebiten.DrawImageOptions{}
 		bucketOp.GeoM = op.GeoM
 		// bucket images contain [bucketTime+bucketSize (fresher edge, y=0) ... bucketTime (older edge, y>0)]
 		// now -> on screen y=0, future -> on screen y<0
-		offset := now.Sub(bucketTime.Add(track.bucketSize)).Seconds() * float64(track.secondSize)
+		offset := now.Sub(bucketTime.Add(trail.bucketSize)).Seconds() * float64(trail.secondSize)
 		bucketOp.GeoM.Translate(0, offset)
-		image.DrawImage(track.getCached(ctxt, bucketTime), &bucketOp)
+		image.DrawImage(trail.getCached(ctxt, bucketTime), &bucketOp)
 		// move to one older bucket
-		bucketTime = bucketTime.Add(-track.bucketSize)
+		bucketTime = bucketTime.Add(-trail.bucketSize)
 	}
 }
 
 // Internal
 
-func (track *Track) redrawBucket(bucketTime time.Time) {
-	track.cachedReady[bucketTime] = false
+func (trail *Trail) redrawBucket(bucketTime time.Time) {
+	trail.cachedReady[bucketTime] = false
 }
 
-func (track *Track) redrawAll() {
-	track.cachedReady = map[time.Time]bool{}
-	track.gridReady = false
+func (trail *Trail) redrawAll() {
+	trail.cachedReady = map[time.Time]bool{}
+	trail.gridReady = false
 }
 
-func (track *Track) resetAll() {
+func (trail *Trail) resetAll() {
 	// mu must be held
 
 	disposeLater := func(image *ebiten.Image) {
@@ -273,84 +300,99 @@ func (track *Track) resetAll() {
 		}()
 	}
 
-	for _, image := range track.cached {
+	for _, image := range trail.cached {
 		disposeLater(image)
 	}
-	track.cached = map[time.Time]*ebiten.Image{}
+	trail.cached = map[time.Time]*ebiten.Image{}
 
-	if track.grid != nil {
-		disposeLater(track.grid)
+	if trail.grid != nil {
+		disposeLater(trail.grid)
 	}
-	track.grid = nil
+	trail.grid = nil
 
-	for _, image := range track.unused {
+	for _, image := range trail.unused {
 		disposeLater(image)
 	}
-	track.unused = []*ebiten.Image{}
+	trail.unused = []*ebiten.Image{}
 
-	track.redrawAll()
+	trail.redrawAll()
+}
+
+func (trail *Trail) allocateImage() *ebiten.Image {
+	// mu must be held
+
+	if len(trail.unused) > 0 {
+		log.Printf("Reusing unused (out of %d)", len(trail.unused))
+		image := trail.unused[len(trail.unused)-1]
+		trail.unused = trail.unused[:len(trail.unused)-1]
+		image.Clear()
+		return image
+	}
+
+	log.Printf("Creating new image")
+	return ebiten.NewImage(
+		int(trail.posWidth*float32(trail.maxPos-trail.minPos+1)),
+		int(float32(trail.bucketSize.Seconds())*trail.secondSize),
+	)
 }
 
 // Discard old spans and cached images
-func (track *Track) cleanup() {
+func (trail *Trail) cleanup() {
 	_, task := trace.NewTask(context.Background(), "cleanup")
 	defer task.End()
 	log.Printf("Starting cleanup")
 
 	now := time.Now()
 
-	track.mu.Lock()
-	defer track.mu.Unlock()
+	trail.mu.Lock()
+	defer trail.mu.Unlock()
 
 	// Cleanup old span buckets
 	removeBuckets := []time.Time{}
-	for bucketTime, bucket := range track.buckets {
-		if bucket.end.Before(now.Add(-track.length)) {
+	for bucketTime, bucket := range trail.buckets {
+		if bucket.end.Before(now.Add(-trail.length)) {
 			removeBuckets = append(removeBuckets, bucketTime)
 		}
 	}
 	for _, bucketTime := range removeBuckets {
-		delete(track.buckets, bucketTime)
+		delete(trail.buckets, bucketTime)
 	}
 
 	// Reuse images
 	freeCached := []time.Time{}
-	for bucketTime := range track.cached {
-		if bucketTime.Add(track.bucketSize).Before(now.Add(-track.length)) {
+	for bucketTime := range trail.cached {
+		if bucketTime.Add(trail.bucketSize).Before(now.Add(-trail.length)) {
 			freeCached = append(freeCached, bucketTime)
 		}
 	}
 	for _, bucketTime := range freeCached {
 		log.Printf("Adding %v to unused", bucketTime)
-		image := track.cached[bucketTime]
-		track.unused = append(track.unused, image)
-		delete(track.cached, bucketTime)
+		image := trail.cached[bucketTime]
+		trail.unused = append(trail.unused, image)
+		delete(trail.cached, bucketTime)
 	}
 
 	log.Printf("Finished cleanup")
 }
 
-// Produce a (cached) grid for track background.
-func (track *Track) getGrid(ctxt context.Context) *ebiten.Image {
+// Produce a (cached) grid for trail background.
+func (trail *Trail) getGrid(ctxt context.Context) *ebiten.Image {
 	defer trace.StartRegion(ctxt, "getCachedGrid").End()
 	// mu must be taken
-	if !track.gridReady {
-		if track.grid == nil {
-			track.grid = ebiten.NewImage(
-				int(track.posWidth*float32(track.maxPos-track.minPos+1)),
-				int(float32(track.bucketSize.Seconds())*track.secondSize),
-			)
+	if !trail.gridReady {
+		if trail.grid == nil {
+			trail.grid = trail.allocateImage()
 		}
 
 		// Key columns
-		for pos := track.minPos; pos <= track.maxPos; pos++ {
-			basePos := pos - track.minPos
+		for pos := trail.minPos; pos <= trail.maxPos; pos++ {
+			basePos := pos - trail.minPos
 
 			path := vector.Path{}
-			path.MoveTo(float32(basePos)*track.posWidth, 0)
-			path.LineTo(float32(basePos)*track.posWidth, float32(track.grid.Bounds().Max.Y))
-			path.LineTo(float32(basePos+1)*track.posWidth, float32(track.grid.Bounds().Max.Y))
-			path.LineTo(float32(basePos+1)*track.posWidth, 0)
+			path.MoveTo(float32(basePos)*trail.posWidth, 0)
+			path.LineTo(float32(basePos)*trail.posWidth, float32(trail.grid.Bounds().Max.Y))
+			path.LineTo(float32(basePos+1)*trail.posWidth, float32(trail.grid.Bounds().Max.Y))
+			path.LineTo(float32(basePos+1)*trail.posWidth, 0)
 
 			var op vector.FillOptions
 			switch {
@@ -362,18 +404,18 @@ func (track *Track) getGrid(ctxt context.Context) *ebiten.Image {
 				op.Color = color.RGBA{0x10, 0x10, 0x10, 0xff}
 			}
 
-			path.Fill(track.grid, &op)
+			path.Fill(trail.grid, &op)
 		}
 
 		// Timeline
-		for t := float32(0); t < float32(track.bucketSize.Seconds()); t += float32(track.bucketSize.Seconds() / float64(track.gridSteps)) {
-			baseTime := t * track.secondSize
+		for t := float32(0); t < float32(trail.bucketSize.Seconds()); t += float32(trail.bucketSize.Seconds() / float64(trail.gridSteps)) {
+			baseTime := t * trail.secondSize
 
 			path := vector.Path{}
 			path.MoveTo(0, baseTime)
-			path.LineTo(float32(track.grid.Bounds().Max.X), baseTime)
-			path.LineTo(float32(track.grid.Bounds().Max.X), baseTime+track.borderWidth)
-			path.LineTo(0, baseTime+track.borderWidth)
+			path.LineTo(float32(trail.grid.Bounds().Max.X), baseTime)
+			path.LineTo(float32(trail.grid.Bounds().Max.X), baseTime+trail.borderWidth)
+			path.LineTo(0, baseTime+trail.borderWidth)
 
 			var op vector.FillOptions
 			switch {
@@ -383,47 +425,32 @@ func (track *Track) getGrid(ctxt context.Context) *ebiten.Image {
 				op.Color = color.RGBA{0x80, 0x80, 0x80, 0xff}
 			}
 
-			path.Fill(track.grid, &op)
+			path.Fill(trail.grid, &op)
 		}
 
 		// Updated!
-		track.gridReady = true
+		trail.gridReady = true
 	}
-	return track.grid
+	return trail.grid
 }
 
-// Produce a (cached) slice of the track with spans.
-func (track *Track) getCached(ctxt context.Context, imageBucketTime time.Time) *ebiten.Image {
+// Produce a (cached) slice of the trail with spans.
+func (trail *Trail) getCached(ctxt context.Context, imageBucketTime time.Time) *ebiten.Image {
 	defer trace.StartRegion(ctxt, "getCachedBucket").End()
-	track.mu.Lock()
-	defer track.mu.Unlock()
+	trail.mu.Lock()
+	defer trail.mu.Unlock()
 
-	if !track.cachedReady[imageBucketTime] {
-		var image *ebiten.Image
-		if track.cached[imageBucketTime] == nil {
-			if len(track.unused) > 0 {
-				log.Printf("Reusing unused (%d)", len(track.unused))
-				image = track.unused[len(track.unused)-1]
-				track.unused = track.unused[:len(track.unused)-1]
-				log.Printf("image: %T %v", image, image)
-				image.Fill(color.Black)
-			} else {
-				log.Printf("Creating new")
-				image = ebiten.NewImage(
-					int(track.posWidth*float32(track.maxPos-track.minPos+1)),
-					int(float32(track.bucketSize.Seconds())*track.secondSize),
-				)
-			}
-			track.cached[imageBucketTime] = image
-		} else {
-			image = track.cached[imageBucketTime]
+	if !trail.cachedReady[imageBucketTime] {
+		if trail.cached[imageBucketTime] == nil {
+			trail.cached[imageBucketTime] = trail.allocateImage()
 		}
+		image := trail.cached[imageBucketTime]
 
 		var spanCount int
-		imageBucketEndTime := imageBucketTime.Add(track.bucketSize)
-		image.DrawImage(track.getGrid(ctxt), &ebiten.DrawImageOptions{})
+		imageBucketEndTime := imageBucketTime.Add(trail.bucketSize)
+		image.DrawImage(trail.getGrid(ctxt), &ebiten.DrawImageOptions{})
 
-		for _, bucket := range track.buckets {
+		for _, bucket := range trail.buckets {
 			if err := bucket.Validate(); err != nil {
 				log.Fatalf("Invalid bucket: %v", err)
 			}
@@ -439,16 +466,16 @@ func (track *Track) getCached(ctxt context.Context, imageBucketTime time.Time) *
 				}
 
 				// X: note index
-				offset := float32(span.pos-track.minPos) * track.posWidth
+				offset := float32(span.pos-trail.minPos) * trail.posWidth
 
 				// start==bucketEndTime -> y=0, older (start < bucketEndTime) -> y>0
 				// start < bucketEndTime, no limit vs bucketTime
 				start := float32(math.Min(
-					imageBucketEndTime.Sub(span.start).Seconds()*float64(track.secondSize),
+					imageBucketEndTime.Sub(span.start).Seconds()*float64(trail.secondSize),
 					float64(image.Bounds().Max.Y),
 				))
 				// end > bucketTime, no limit vs bucketEndTime
-				end := float32(math.Max(imageBucketEndTime.Sub(span.end).Seconds()*float64(track.secondSize), 0))
+				end := float32(math.Max(imageBucketEndTime.Sub(span.end).Seconds()*float64(trail.secondSize), 0))
 
 				//log.Printf("Drawing: %v -> [%.1f : %.1f] in %v", span, start, end, imageBucketTime)
 
@@ -466,10 +493,10 @@ func (track *Track) getCached(ctxt context.Context, imageBucketTime time.Time) *
 				}
 
 				path := vector.Path{}
-				path.MoveTo(offset+track.borderWidth, start)
-				path.LineTo(offset+track.borderWidth, end)
-				path.LineTo(offset+track.posWidth-track.borderWidth, end)
-				path.LineTo(offset+track.posWidth-track.borderWidth, start)
+				path.MoveTo(offset+trail.borderWidth, start)
+				path.LineTo(offset+trail.borderWidth, end)
+				path.LineTo(offset+trail.posWidth-trail.borderWidth, end)
+				path.LineTo(offset+trail.posWidth-trail.borderWidth, start)
 				op := vector.FillOptions{
 					Color: spanPalette[span.id],
 				}
@@ -482,7 +509,7 @@ func (track *Track) getCached(ctxt context.Context, imageBucketTime time.Time) *
 		//	image.Bounds().Max.X, image.Bounds().Max.Y, spanCount, imageBucketTime,
 		//)
 
-		track.cachedReady[imageBucketTime] = true
+		trail.cachedReady[imageBucketTime] = true
 	}
-	return track.cached[imageBucketTime]
+	return trail.cached[imageBucketTime]
 }

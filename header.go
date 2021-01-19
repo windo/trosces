@@ -14,6 +14,7 @@ type Header struct {
 	max    int
 	active []int
 
+	keyboard    bool
 	keyWidth    float32
 	keyHeight   float32
 	borderWidth float32
@@ -88,9 +89,6 @@ func (header *Header) SetActive(active []int) {
 }
 
 func (header *Header) Draw(image *ebiten.Image, op *ebiten.DrawImageOptions) {
-	if header.max-header.min == 0 {
-		return
-	}
 	image.DrawImage(header.getBase(), op)
 	image.DrawImage(header.getOverlay(), op)
 }
@@ -101,7 +99,7 @@ func (header *Header) Width() float32 {
 
 // Internal
 
-func (header *Header) drawKey(image *ebiten.Image, note int, keyColor color.Color) {
+func (header *Header) drawKey(image *ebiten.Image, note int, highlight bool) {
 	halfBorder := header.borderWidth / 2
 	halfWidth := header.keyWidth / 2
 	halfHeight := header.keyHeight / 2
@@ -149,7 +147,42 @@ func (header *Header) drawKey(image *ebiten.Image, note int, keyColor color.Colo
 		path.LineTo(keyEndOffset, header.keyHeight-header.borderWidth)
 		path.LineTo(keyEndOffset, halfHeight+halfBorder)
 	}
+	var keyColor color.Color
+	if Note(note).IsWhite() {
+		if highlight {
+			keyColor = header.whiteHiColor
+		} else {
+			keyColor = header.whiteColor
+		}
+	} else {
+		if highlight {
+			keyColor = header.blackHiColor
+		} else {
+			keyColor = header.blackColor
+		}
+	}
 	op := vector.FillOptions{Color: keyColor}
+	path.Fill(image, &op)
+}
+
+func (header *Header) drawPad(image *ebiten.Image, pos int, highlight bool) {
+	halfBorder := header.borderWidth / 2
+	baseOffset := float32(pos-header.min) * header.keyWidth
+	keyOffset := baseOffset + halfBorder
+	keyEndOffset := baseOffset + header.keyWidth - halfBorder
+
+	path := vector.Path{}
+	path.MoveTo(keyOffset, header.borderWidth)
+	path.LineTo(keyOffset, header.keyHeight-header.borderWidth)
+	path.LineTo(keyEndOffset, header.keyHeight-header.borderWidth)
+	path.LineTo(keyEndOffset, header.borderWidth)
+	var padColor color.Color
+	if highlight {
+		padColor = header.whiteHiColor
+	} else {
+		padColor = header.whiteColor
+	}
+	op := vector.FillOptions{Color: padColor}
 	path.Fill(image, &op)
 }
 
@@ -166,13 +199,11 @@ func (header *Header) getBase() *ebiten.Image {
 		header.base.Fill(header.borderColor)
 
 		for note := header.min; note <= header.max; note++ {
-			var keyColor color.Color
-			if Note(note).IsWhite() {
-				keyColor = header.whiteColor
+			if header.keyboard {
+				header.drawKey(header.base, note, false)
 			} else {
-				keyColor = header.blackColor
+				header.drawPad(header.base, note, false)
 			}
-			header.drawKey(header.base, note, keyColor)
 		}
 	}
 	return header.base
@@ -192,13 +223,11 @@ func (header *Header) getOverlay() *ebiten.Image {
 		header.overlay.Fill(color.Transparent)
 
 		for _, note := range header.active {
-			var keyColor color.Color
-			if Note(note).IsWhite() {
-				keyColor = header.whiteHiColor
+			if header.keyboard {
+				header.drawKey(header.overlay, note, true)
 			} else {
-				keyColor = header.blackHiColor
+				header.drawPad(header.overlay, note, true)
 			}
-			header.drawKey(header.overlay, note, keyColor)
 		}
 
 		header.overlayReady = true

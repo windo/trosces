@@ -4,9 +4,11 @@ import (
 	"errors"
 	"flag"
 	"log"
+	"math/rand"
 	"os"
 	"runtime/pprof"
 	"runtime/trace"
+	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
 )
@@ -45,6 +47,71 @@ func main() {
 	}
 
 	trosces := NewTrosces()
+
+	// Maybe inject some synthetic events.
+	if *simulateInput {
+		// Random
+		go func() {
+			for {
+				if rand.Float32() < 0.1 {
+					note := 32 + rand.Intn(4*12)
+					trosces.keyboard.trail.Span(
+						rand.Intn(7),
+						note,
+						time.Duration(rand.Float32()*float32(time.Second)),
+					)
+				}
+				time.Sleep(time.Second / 60)
+			}
+		}()
+
+		// Synchronized
+		go func() {
+			simulationTicker := time.Tick(4 * time.Second)
+			for {
+				// Drums
+				go func() {
+					for i := 0; i < 4; i++ {
+						go func() {
+							for i := 0; i < 2; i++ {
+								trosces.drums.trail.Span(0, 0, time.Second/16)
+								time.Sleep(time.Second / 2)
+							}
+						}()
+						go func() {
+							time.Sleep(time.Second / 4)
+							trosces.drums.trail.Span(1, 1, time.Second/16)
+							time.Sleep(time.Second / 2)
+							trosces.drums.trail.Span(1, 1, time.Second/16)
+							time.Sleep(time.Second / 4 / 4 * 3)
+							trosces.drums.trail.Span(1, 1, time.Second/16)
+						}()
+						go func() {
+							for i := 0; i < 8; i++ {
+								trosces.drums.trail.Span(2, 2, time.Second/16)
+								time.Sleep(time.Second / 8)
+							}
+						}()
+						time.Sleep(time.Second)
+					}
+				}()
+
+				// Layers
+				go func() {
+					if rand.Intn(4) == 0 {
+						trosces.layers.trail.Span(1, 0, 4*time.Second)
+					} else {
+						trosces.layers.trail.Span(0, 0, 4*time.Second)
+					}
+					if rand.Intn(4) == 0 {
+						trosces.layers.trail.Span(0, 1, 4*time.Second)
+					}
+				}()
+
+				<-simulationTicker
+			}
+		}()
+	}
 	LaunchOSCServer(trosces)
 
 	ebiten.SetWindowTitle("TrOSCes")

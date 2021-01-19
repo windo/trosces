@@ -115,7 +115,7 @@ type Trail struct {
 	mu sync.Mutex
 }
 
-func NewTrail(secondSize float32, length time.Duration) *Trail {
+func NewTrail(bucketSize time.Duration, length time.Duration, secondSize float32, posWidth float32) *Trail {
 	log.Printf("New trail")
 	trail := Trail{
 		buckets: map[time.Time]*SpanBucket{},
@@ -128,10 +128,10 @@ func NewTrail(secondSize float32, length time.Duration) *Trail {
 		maxPos: 0,
 
 		secondSize:  secondSize,
-		bucketSize:  time.Second,
+		bucketSize:  bucketSize,
 		length:      length,
 		borderWidth: 1,
-		posWidth:    14,
+		posWidth:    posWidth,
 		gridSteps:   4,
 	}
 

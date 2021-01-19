@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"log"
-	"math/rand"
 	"runtime/trace"
 	"time"
 
@@ -13,35 +12,55 @@ import (
 )
 
 type Trosces struct {
-	keyboard      *Header
-	keyboardTrail *Trail
-
-	drums     *Header
-	drumTrail *Trail
-
-	layers     *Header
-	layerTrail *Trail
-
-	simulationTicker <-chan time.Time
+	keyboard *Track
+	drums    *Track
+	layers   *Track
 }
 
 func NewTrosces() *Trosces {
 	log.Printf("Creating new Trosces")
-	return &Trosces{
-		keyboard:      NewHeader(14, 30),
-		keyboardTrail: NewTrail(256, 4*time.Second),
-
-		drums:     NewHeader(28, 30),
-		drumTrail: NewTrail(256, 4*time.Second),
-
-		layers:     NewHeader(28, 30),
-		layerTrail: NewTrail(8, 120*time.Second),
+	trosces := &Trosces{
+		keyboard: &Track{
+			header: NewHeader(15, 30),
+			trail:  NewTrail(time.Second, 4*time.Second, 256, 15),
+		},
+		drums: &Track{
+			header: NewHeader(30, 30),
+			trail:  NewTrail(time.Second, 4*time.Second, 256, 30),
+		},
+		layers: &Track{
+			header: NewHeader(30, 30),
+			trail:  NewTrail(8*time.Second, 120*time.Second, 8, 30),
+		},
 	}
+	trosces.keyboard.header.keyboard = true
+	trosces.drums.header.borderWidth = 2
+	trosces.drums.trail.borderWidth = 2
+	trosces.layers.header.borderWidth = 2
+	trosces.layers.trail.borderWidth = 2
+
+	return trosces
 }
 
 type Track struct {
-	header Header
+	header *Header
 	trail  *Trail
+}
+
+func (track *Track) Resolve() {
+	track.header.SetRange(track.trail.minPos, track.trail.maxPos)
+	track.header.SetActive(track.trail.ActivePos())
+}
+
+func (track *Track) Draw(ctx context.Context, image *ebiten.Image, op *ebiten.DrawImageOptions) {
+	trailOp := *op
+	trailOp.GeoM.Translate(0, float64(track.header.keyHeight))
+	track.trail.Draw(ctx, image, &trailOp)
+	track.header.Draw(image, op)
+}
+
+func (track *Track) Width() float32 {
+	return track.header.Width()
 }
 
 var Finished = errors.New("Trosces finished")
@@ -50,71 +69,19 @@ func (trosces *Trosces) Update() error {
 	_, task := trace.NewTask(context.Background(), "UpdateTrosces")
 	defer task.End()
 
-	// Maybe inject some synthetic events.
-	if *simulateInput {
-		if rand.Float32() < 0.1 {
-			note := 32 + rand.Intn(4*12)
-			trosces.keyboardTrail.Span(
-				rand.Intn(7),
-				note,
-				time.Duration(rand.Float32()*float32(time.Second)),
-			)
-		}
-		if trosces.simulationTicker == nil {
-			trosces.simulationTicker = time.Tick(time.Second)
-		}
-		select {
-		case <-trosces.simulationTicker:
-			go func() {
-				for i := 0; i < 2; i++ {
-					trosces.drumTrail.Span(0, 0, time.Second/16)
-					time.Sleep(time.Second / 2)
-				}
-			}()
-			go func() {
-				time.Sleep(time.Second / 4)
-				trosces.drumTrail.Span(1, 1, time.Second/16)
-				time.Sleep(time.Second / 2)
-				trosces.drumTrail.Span(1, 1, time.Second/16)
-				time.Sleep(time.Second / 4 / 4 * 3)
-				trosces.drumTrail.Span(1, 1, time.Second/16)
-			}()
-			go func() {
-				for i := 0; i < 8; i++ {
-					trosces.drumTrail.Span(2, 2, time.Second/16)
-					time.Sleep(time.Second / 8)
-				}
-			}()
-		default:
-		}
-	}
-
 	// Header matches the trail.
-	trosces.keyboard.SetRange(trosces.keyboardTrail.minPos, trosces.keyboardTrail.maxPos)
-	trosces.keyboard.SetActive(trosces.keyboardTrail.ActivePos())
-	trosces.drums.SetRange(trosces.drumTrail.minPos, trosces.drumTrail.maxPos)
-	trosces.drums.SetActive(trosces.drumTrail.ActivePos())
-	trosces.layers.SetRange(trosces.layerTrail.minPos, trosces.layerTrail.maxPos)
-	trosces.layers.SetActive(trosces.layerTrail.ActivePos())
+	trosces.keyboard.Resolve()
+	trosces.drums.Resolve()
+	trosces.layers.Resolve()
 
 	// Grid steps
-	if inpututil.IsKeyJustPressed(ebiten.Key1) {
-		trosces.keyboardTrail.SetGridSteps(11)
-	}
 	if inpututil.IsKeyJustPressed(ebiten.Key3) {
-		trosces.keyboardTrail.SetGridSteps(3)
+		trosces.keyboard.trail.SetGridSteps(3)
+		trosces.drums.trail.SetGridSteps(3)
 	}
 	if inpututil.IsKeyJustPressed(ebiten.Key4) {
-		trosces.keyboardTrail.SetGridSteps(4)
-	}
-	if inpututil.IsKeyJustPressed(ebiten.Key5) {
-		trosces.keyboardTrail.SetGridSteps(5)
-	}
-	if inpututil.IsKeyJustPressed(ebiten.Key6) {
-		trosces.keyboardTrail.SetGridSteps(6)
-	}
-	if inpututil.IsKeyJustPressed(ebiten.Key7) {
-		trosces.keyboardTrail.SetGridSteps(7)
+		trosces.keyboard.trail.SetGridSteps(4)
+		trosces.drums.trail.SetGridSteps(4)
 	}
 
 	// Maybe finish.
@@ -126,32 +93,22 @@ func (trosces *Trosces) Update() error {
 }
 
 func (trosces *Trosces) Draw(screen *ebiten.Image) {
-	ctxt, task := trace.NewTask(context.Background(), "DrawTrosces")
+	ctx, task := trace.NewTask(context.Background(), "DrawTrosces")
 	defer task.End()
 
 	var x float64
-	trailOp := ebiten.DrawImageOptions{}
-	trailOp.GeoM.Translate(x, float64(trosces.keyboard.keyHeight))
-	trosces.keyboardTrail.Draw(ctxt, screen, &trailOp)
-	headerOp := ebiten.DrawImageOptions{}
-	headerOp.GeoM.Translate(x, 0)
-	trosces.keyboard.Draw(screen, &headerOp)
-
+	op := ebiten.DrawImageOptions{}
+	trosces.keyboard.Draw(ctx, screen, &op)
 	x += float64(trosces.keyboard.Width())
-	trailOp = ebiten.DrawImageOptions{}
-	trailOp.GeoM.Translate(x, float64(trosces.drums.keyHeight))
-	trosces.drumTrail.Draw(ctxt, screen, &trailOp)
-	headerOp = ebiten.DrawImageOptions{}
-	headerOp.GeoM.Translate(x, 0)
-	trosces.drums.Draw(screen, &headerOp)
 
+	op = ebiten.DrawImageOptions{}
+	op.GeoM.Translate(x, 0)
+	trosces.drums.Draw(ctx, screen, &op)
 	x += float64(trosces.drums.Width())
-	trailOp = ebiten.DrawImageOptions{}
-	trailOp.GeoM.Translate(x, float64(trosces.layers.keyHeight))
-	trosces.layerTrail.Draw(ctxt, screen, &trailOp)
-	headerOp = ebiten.DrawImageOptions{}
-	headerOp.GeoM.Translate(x, 0)
-	trosces.layers.Draw(screen, &headerOp)
+
+	op = ebiten.DrawImageOptions{}
+	op.GeoM.Translate(x, 0)
+	trosces.layers.Draw(ctx, screen, &op)
 }
 
 func (trosces *Trosces) Layout(outsideWidth, outsideHeight int) (int, int) {

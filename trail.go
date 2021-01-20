@@ -37,6 +37,16 @@ func (span *Span) InRange(start time.Time, end time.Time) bool {
 	return true
 }
 
+func (span *Span) InVisualRange(start time.Time, end time.Time) bool {
+	if span.end.Before(start.Add(10 * time.Millisecond)) {
+		return false
+	}
+	if span.start.After(end.Add(10 * -time.Millisecond)) {
+		return false
+	}
+	return true
+}
+
 func (span *Span) String() string {
 	now := time.Now()
 	return fmt.Sprintf("%d@%d [%.2f:%.2f]", span.id, span.pos, span.start.Sub(now).Seconds(), span.end.Sub(now).Seconds())
@@ -437,6 +447,49 @@ func (trail *Trail) getGrid(ctxt context.Context) *ebiten.Image {
 	return trail.grid
 }
 
+func (trail *Trail) drawSpan(image *ebiten.Image, bucketTime time.Time, span *Span, subindices int, subindex int) {
+	bucketEndTime := bucketTime.Add(trail.bucketSize)
+
+	// X: note index
+	baseOffset := float32(span.pos-trail.minPos) * trail.posWidth
+	subWidth := (trail.posWidth - 2*trail.borderWidth) / float32(subindices)
+	offset := baseOffset + trail.borderWidth + float32(subindex)*subWidth
+
+	// start==bucketEndTime -> y=0, older (start < bucketEndTime) -> y>0
+	// start < bucketEndTime, no limit vs bucketTime
+	start := float32(math.Min(
+		bucketEndTime.Sub(span.start).Seconds()*float64(trail.secondSize),
+		float64(image.Bounds().Max.Y),
+	))
+	// end > bucketTime, no limit vs bucketEndTime
+	end := float32(math.Max(bucketEndTime.Sub(span.end).Seconds()*float64(trail.secondSize), 0))
+
+	//log.Printf("Drawing: %v -> [%.1f : %.1f] in %v", span, start, end, imageBucketTime)
+
+	if start < 0 {
+		log.Fatalf("start should be within bucket")
+	}
+	if end > float32(image.Bounds().Max.Y) {
+		log.Fatalf("end should be within bucket")
+	}
+	if end > start {
+		log.Fatalf("wrong order")
+	}
+	if start-end < 1e-6 {
+		log.Fatalf("too short")
+	}
+
+	path := vector.Path{}
+	path.MoveTo(offset, start)
+	path.LineTo(offset, end)
+	path.LineTo(offset+subWidth, end)
+	path.LineTo(offset+subWidth, start)
+	op := vector.FillOptions{
+		Color: spanPalette[span.id],
+	}
+	path.Fill(image, &op)
+}
+
 // Produce a (cached) slice of the trail with spans.
 func (trail *Trail) getCached(ctxt context.Context, imageBucketTime time.Time) *ebiten.Image {
 	defer trace.StartRegion(ctxt, "getCachedBucket").End()
@@ -449,7 +502,7 @@ func (trail *Trail) getCached(ctxt context.Context, imageBucketTime time.Time) *
 		}
 		image := trail.cached[imageBucketTime]
 
-		var spanCount int
+		var spans []*Span
 		imageBucketEndTime := imageBucketTime.Add(trail.bucketSize)
 		image.DrawImage(trail.getGrid(ctxt), &ebiten.DrawImageOptions{})
 
@@ -467,45 +520,59 @@ func (trail *Trail) getCached(ctxt context.Context, imageBucketTime time.Time) *
 					//log.Printf("Span %v not in range", span.start)
 					continue
 				}
-
-				// X: note index
-				offset := float32(span.pos-trail.minPos) * trail.posWidth
-
-				// start==bucketEndTime -> y=0, older (start < bucketEndTime) -> y>0
-				// start < bucketEndTime, no limit vs bucketTime
-				start := float32(math.Min(
-					imageBucketEndTime.Sub(span.start).Seconds()*float64(trail.secondSize),
-					float64(image.Bounds().Max.Y),
-				))
-				// end > bucketTime, no limit vs bucketEndTime
-				end := float32(math.Max(imageBucketEndTime.Sub(span.end).Seconds()*float64(trail.secondSize), 0))
-
-				//log.Printf("Drawing: %v -> [%.1f : %.1f] in %v", span, start, end, imageBucketTime)
-
-				if start < 0 {
-					log.Fatalf("start should be within bucket")
-				}
-				if end > float32(image.Bounds().Max.Y) {
-					log.Fatalf("end should be within bucket")
-				}
-				if end > start {
-					log.Fatalf("wrong order")
-				}
-				if start-end < 1e-6 {
-					log.Fatalf("too short")
-				}
-
-				path := vector.Path{}
-				path.MoveTo(offset+trail.borderWidth, start)
-				path.LineTo(offset+trail.borderWidth, end)
-				path.LineTo(offset+trail.posWidth-trail.borderWidth, end)
-				path.LineTo(offset+trail.posWidth-trail.borderWidth, start)
-				op := vector.FillOptions{
-					Color: spanPalette[span.id],
-				}
-				path.Fill(image, &op)
-				spanCount++
+				spans = append(spans, span)
 			}
+		}
+		// Group by position.
+		byPos := map[int][]*Span{}
+		for _, span := range spans {
+			byPos[span.pos] = append(byPos[span.pos], span)
+		}
+		// By position, which sub-index to map to which IDs?
+		// But only do this for spans that overlap
+		subindexMap := map[int]map[int]int{}
+		overlaps := map[*Span]struct{}{}
+		for _, span := range spans {
+			for _, other := range byPos[span.pos] {
+				if span == other {
+					continue
+				}
+				if span.InVisualRange(other.start, other.end) {
+					if _, ok := subindexMap[span.pos]; !ok {
+						subindexMap[span.pos] = map[int]int{}
+					}
+					// Initialize all at 0, update later.
+					subindexMap[span.pos][span.id] = 0
+					// Record the overlap
+					overlaps[span] = struct{}{}
+					break
+				}
+			}
+		}
+		for _, idMap := range subindexMap {
+			ids := make([]int, len(idMap))
+			i := 0
+			for id := range idMap {
+				ids[i] = id
+				i++
+			}
+			sort.Ints(ids)
+			for i, id := range ids {
+				idMap[id] = i
+			}
+		}
+		log.Printf("byPos=%+v subindexMap=%+v", byPos, subindexMap)
+		for _, span := range spans {
+			var (
+				subindex   int = 0
+				subindices int = 1
+			)
+			if _, ok := overlaps[span]; ok {
+				idMap := subindexMap[span.pos]
+				subindex = idMap[span.id]
+				subindices = len(idMap)
+			}
+			trail.drawSpan(image, imageBucketTime, span, subindices, subindex)
 		}
 		//log.Printf(
 		//	"New image slice %dx%d with %d spans for bucket at %v",

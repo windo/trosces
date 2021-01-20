@@ -93,15 +93,16 @@ type Trail struct {
 	// Spans bucketed by periods of duration `bucketSize`
 	buckets map[time.Time]*SpanBucket
 
+	minPos int
+	maxPos int
+	active []*Span
+
 	// Images of spans from [time : time + bucketSize]
 	cached      map[time.Time]*ebiten.Image
 	cachedReady map[time.Time]bool
 	grid        *ebiten.Image
 	gridReady   bool
 	unused      []*ebiten.Image
-
-	minPos int
-	maxPos int
 
 	secondSize float32
 	bpm        float32
@@ -196,8 +197,10 @@ func (trail *Trail) Span(id int, pos int, d time.Duration) {
 	// Invalidate cached bucket image
 	trail.redrawBucket(bucketTime)
 	bucket.spans = append(bucket.spans, span)
+	trail.active = append(trail.active, span)
 }
 
+// TODO: Unused as of now
 func (trail *Trail) Stop(id int, pos int) {
 	defer trace.StartRegion(context.Background(), "StopSpan").End()
 	now := time.Now()
@@ -235,19 +238,19 @@ func (trail *Trail) ActivePos() []int {
 	activeMap := map[int]struct{}{}
 	active := []int{}
 
-	for _, bucket := range trail.buckets {
-		if !bucket.InRange(now, now) {
+	i := 0
+	for i < len(trail.active) {
+		span := trail.active[i]
+		if !span.InRange(now, now) {
+			// TODO: Only place where cleanup of trail.active happens!
+			trail.active = append(trail.active[:i], trail.active[i+1:]...)
 			continue
 		}
-		for _, span := range bucket.spans {
-			if !span.InRange(now, now) {
-				continue
-			}
-			if _, ok := activeMap[span.pos]; !ok {
-				activeMap[span.pos] = struct{}{}
-				active = append(active, span.pos)
-			}
+		if _, ok := activeMap[span.pos]; !ok {
+			activeMap[span.pos] = struct{}{}
+			active = append(active, span.pos)
 		}
+		i++
 	}
 	sort.Ints(active)
 	return active

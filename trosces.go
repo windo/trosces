@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"errors"
+	"image/color"
 	"log"
 	"runtime/trace"
 	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
+	"github.com/hajimehoshi/ebiten/v2/vector"
 )
 
 type Track struct {
@@ -173,6 +175,16 @@ func (trosces *Trosces) Draw(screen *ebiten.Image) {
 	op = ebiten.DrawImageOptions{}
 	op.GeoM.Translate(x, 0)
 	trosces.layers.Draw(ctx, screen, &op)
+	x += float64(trosces.layers.Width())
+
+	// TODO: Actually don't draw the extra pixels above!
+	path := vector.Path{}
+	line := trosces.keyboard.header.keyHeight + float32(trosces.keyboard.trail.length.Seconds())*trosces.keyboard.trail.secondSize
+	path.MoveTo(0, line-256)
+	path.LineTo(float32(x), line-256)
+	path.LineTo(float32(x), line+256)
+	path.LineTo(0, line+256)
+	path.Fill(screen, &vector.FillOptions{Color: color.Black})
 }
 
 func (trosces *Trosces) Layout(outsideWidth, outsideHeight int) (int, int) {

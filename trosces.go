@@ -88,7 +88,7 @@ func NewTrosces() *Trosces {
 		},
 		variantMappers: map[int]*Mapper{},
 
-		pulse: NewPulse(120),
+		pulse: NewPulse(60),
 	}
 	trosces.keyboard.header.keyboard = true
 	trosces.drums.header.borderWidth = 2

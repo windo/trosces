@@ -15,7 +15,7 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/vector"
 )
 
-const VisualSlack time.Duration = 10 * time.Millisecond
+var VisualSlack Duration = Duration{beats: 0.01}
 
 type Span struct {
 	// "Instrument" or other category ID (for the same position)
@@ -24,12 +24,12 @@ type Span struct {
 	pos int
 
 	// Start of the span.
-	start time.Time
+	start Time
 	// End - potentially ~far in the future.
-	end time.Time
+	end Time
 }
 
-func (span *Span) InRange(start time.Time, end time.Time) bool {
+func (span *Span) InRange(start Time, end Time) bool {
 	if span.end.Before(start) {
 		return false
 	}
@@ -39,40 +39,39 @@ func (span *Span) InRange(start time.Time, end time.Time) bool {
 	return true
 }
 
-func (span *Span) InVisualRange(start time.Time, end time.Time) bool {
+func (span *Span) InVisualRange(start Time, end Time) bool {
 	if span.end.Before(start.Add(VisualSlack)) {
 		return false
 	}
-	if span.start.After(end.Add(-VisualSlack)) {
+	if span.start.After(end.Sub(VisualSlack)) {
 		return false
 	}
 	return true
 }
 
 func (span *Span) String() string {
-	now := time.Now()
-	return fmt.Sprintf("%d@%d [%.2f:%.2f]", span.id, span.pos, span.start.Sub(now).Seconds(), span.end.Sub(now).Seconds())
+	return fmt.Sprintf("%d@%d [%.2f:%.2f]", span.id, span.pos, span.start, span.end)
 }
 
 var (
 	spanPalette = []color.Color{
-		color.RGBA{0x44, 0x77, 0xaa, 0xff},
-		color.RGBA{0x66, 0xcc, 0xee, 0xff},
-		color.RGBA{0x22, 0x88, 0x33, 0xff},
-		color.RGBA{0xcc, 0xbb, 0x44, 0xff},
-		color.RGBA{0xee, 0x66, 0x77, 0xff},
-		color.RGBA{0xaa, 0x33, 0x77, 0xff},
-		color.RGBA{0xbb, 0xbb, 0xbb, 0xff},
+		color.RGBA{0x44, 0x77, 0xaa, 0xff}, // Blue
+		color.RGBA{0x22, 0x88, 0x33, 0xff}, // Green
+		color.RGBA{0xcc, 0xbb, 0x44, 0xff}, // Yellow
+		color.RGBA{0xee, 0x66, 0x77, 0xff}, // Red
+		color.RGBA{0x66, 0xcc, 0xee, 0xff}, // Cyan
+		color.RGBA{0xaa, 0x33, 0x77, 0xff}, // Purple
+		color.RGBA{0xbb, 0xbb, 0xbb, 0xff}, // Grey
 	}
 )
 
 type SpanBucket struct {
-	start time.Time
-	end   time.Time
+	start Time
+	end   Time
 	spans []*Span
 }
 
-func (bucket *SpanBucket) InRange(start time.Time, end time.Time) bool {
+func (bucket *SpanBucket) InRange(start Time, end Time) bool {
 	if bucket.end.Before(start) {
 		return false
 	}
@@ -83,7 +82,7 @@ func (bucket *SpanBucket) InRange(start time.Time, end time.Time) bool {
 }
 
 func (bucket *SpanBucket) UpdateEnd() {
-	var latest time.Time
+	var latest Time
 	for _, span := range bucket.spans {
 		if span.end.After(latest) {
 			latest = span.end
@@ -103,15 +102,15 @@ func (bucket *SpanBucket) Validate() error {
 
 type Trail struct {
 	// Spans bucketed by periods of duration `bucketSize`
-	buckets map[time.Time]*SpanBucket
+	buckets map[Time]*SpanBucket
 
 	minPos int
 	maxPos int
 	active []*Span
 
 	// Images of spans from [time : time + bucketSize]
-	cached      map[time.Time]*ebiten.Image
-	cachedReady map[time.Time]bool
+	cached      map[Time]*ebiten.Image
+	cachedReady map[Time]bool
 	grid        *ebiten.Image
 	gridReady   bool
 	unused      []*ebiten.Image
@@ -119,22 +118,24 @@ type Trail struct {
 	secondSize float32
 	bpm        float32
 	gridSteps  int
-	length     time.Duration
-	bucketSize time.Duration
+	length     Duration
+	bucketSize Duration
 
 	posWidth    float32
 	borderWidth float32
 
+	pulse *Pulse
+
 	mu sync.Mutex
 }
 
-func NewTrail(bucketSize time.Duration, length time.Duration, secondSize float32, posWidth float32) *Trail {
+func NewTrail(bucketSize Duration, length Duration, secondSize float32, posWidth float32) *Trail {
 	log.Printf("New trail")
 	trail := Trail{
-		buckets: map[time.Time]*SpanBucket{},
+		buckets: map[Time]*SpanBucket{},
 
-		cached:      map[time.Time]*ebiten.Image{},
-		cachedReady: map[time.Time]bool{},
+		cached:      map[Time]*ebiten.Image{},
+		cachedReady: map[Time]bool{},
 		unused:      []*ebiten.Image{},
 
 		minPos: 0,
@@ -159,9 +160,9 @@ func NewTrail(bucketSize time.Duration, length time.Duration, secondSize float32
 	return &trail
 }
 
-func (trail *Trail) Span(id int, pos int, d time.Duration) {
+func (trail *Trail) Span(id int, pos int, d Duration) {
 	defer trace.StartRegion(context.Background(), "NewSpan").End()
-	now := time.Now()
+	now := trail.pulse.Now()
 	bucketTime := now.Truncate(trail.bucketSize)
 
 	if id >= len(spanPalette) {
@@ -215,7 +216,7 @@ func (trail *Trail) Span(id int, pos int, d time.Duration) {
 // TODO: Unused as of now
 func (trail *Trail) Stop(id int, pos int) {
 	defer trace.StartRegion(context.Background(), "StopSpan").End()
-	now := time.Now()
+	now := trail.pulse.Now()
 	trail.mu.Lock()
 	defer trail.mu.Unlock()
 
@@ -246,7 +247,7 @@ func (trail *Trail) ActivePos() []int {
 	trail.mu.Lock()
 	defer trail.mu.Unlock()
 
-	now := time.Now()
+	now := trail.pulse.Now()
 	activeMap := map[int]struct{}{}
 	active := []int{}
 
@@ -271,14 +272,14 @@ func (trail *Trail) ActivePos() []int {
 // Draw all the trail components.
 func (trail *Trail) Draw(ctxt context.Context, image *ebiten.Image, op *ebiten.DrawImageOptions) {
 	defer trace.StartRegion(ctxt, "DrawTrail").End()
-	now := time.Now()
+	now := trail.pulse.Now()
 
 	// History (time < now) flows away from 0.
 
 	// Bucket covering now, extensing at most bucketSize to the future
 	bucketTime := now.Truncate(trail.bucketSize)
 	// End of the scroll trail
-	trailEnd := now.Add(-trail.length)
+	trailEnd := now.Sub(trail.length)
 
 	// Until we find a bucket that covers the end of the trail
 	for bucketTime.After(trailEnd) {
@@ -286,22 +287,22 @@ func (trail *Trail) Draw(ctxt context.Context, image *ebiten.Image, op *ebiten.D
 		bucketOp.GeoM = op.GeoM
 		// bucket images contain [bucketTime+bucketSize (fresher edge, y=0) ... bucketTime (older edge, y>0)]
 		// now -> on screen y=0, future -> on screen y<0
-		offset := now.Sub(bucketTime.Add(trail.bucketSize)).Seconds() * float64(trail.secondSize)
-		bucketOp.GeoM.Translate(0, offset)
+		offset := now.Delta(bucketTime.Add(trail.bucketSize)).Beats() * trail.secondSize
+		bucketOp.GeoM.Translate(0, float64(offset))
 		image.DrawImage(trail.getCached(ctxt, bucketTime), &bucketOp)
 		// move to one older bucket
-		bucketTime = bucketTime.Add(-trail.bucketSize)
+		bucketTime = bucketTime.Sub(trail.bucketSize)
 	}
 }
 
 // Internal
 
-func (trail *Trail) redrawBucket(bucketTime time.Time) {
+func (trail *Trail) redrawBucket(bucketTime Time) {
 	trail.cachedReady[bucketTime] = false
 }
 
 func (trail *Trail) redrawAll() {
-	trail.cachedReady = map[time.Time]bool{}
+	trail.cachedReady = map[Time]bool{}
 	trail.gridReady = false
 }
 
@@ -318,7 +319,7 @@ func (trail *Trail) resetAll() {
 	for _, image := range trail.cached {
 		disposeLater(image)
 	}
-	trail.cached = map[time.Time]*ebiten.Image{}
+	trail.cached = map[Time]*ebiten.Image{}
 
 	if trail.grid != nil {
 		disposeLater(trail.grid)
@@ -347,7 +348,7 @@ func (trail *Trail) allocateImage() *ebiten.Image {
 	log.Printf("Creating new image")
 	return ebiten.NewImage(
 		int(trail.posWidth*float32(trail.maxPos-trail.minPos+1)),
-		int(float32(trail.bucketSize.Seconds())*trail.secondSize),
+		int(trail.bucketSize.Beats()*trail.secondSize),
 	)
 }
 
@@ -357,15 +358,15 @@ func (trail *Trail) cleanup() {
 	defer task.End()
 	log.Printf("Starting cleanup")
 
-	now := time.Now()
+	now := trail.pulse.Now()
 
 	trail.mu.Lock()
 	defer trail.mu.Unlock()
 
 	// Cleanup old span buckets
-	removeBuckets := []time.Time{}
+	removeBuckets := []Time{}
 	for bucketTime, bucket := range trail.buckets {
-		if bucket.end.Before(now.Add(-trail.length)) {
+		if bucket.end.Before(now.Sub(trail.length)) {
 			removeBuckets = append(removeBuckets, bucketTime)
 		}
 	}
@@ -374,9 +375,9 @@ func (trail *Trail) cleanup() {
 	}
 
 	// Reuse images
-	freeCached := []time.Time{}
+	freeCached := []Time{}
 	for bucketTime := range trail.cached {
-		if bucketTime.Add(trail.bucketSize).Before(now.Add(-trail.length)) {
+		if bucketTime.Add(trail.bucketSize).Before(now.Sub(trail.length)) {
 			freeCached = append(freeCached, bucketTime)
 		}
 	}
@@ -423,7 +424,7 @@ func (trail *Trail) getGrid(ctxt context.Context) *ebiten.Image {
 		}
 
 		// Timeline
-		for t := float32(0); t < float32(trail.bucketSize.Seconds()); t += float32(trail.bucketSize.Seconds() / float64(trail.gridSteps)) {
+		for t := float32(0); t < trail.bucketSize.Beats(); t += trail.bucketSize.Beats() / float32(trail.gridSteps) {
 			baseTime := t * trail.secondSize
 
 			path := vector.Path{}
@@ -449,7 +450,7 @@ func (trail *Trail) getGrid(ctxt context.Context) *ebiten.Image {
 	return trail.grid
 }
 
-func (trail *Trail) drawSubSpan(image *ebiten.Image, bucketTime time.Time, subSpan *SubSpan) {
+func (trail *Trail) drawSubSpan(image *ebiten.Image, bucketTime Time, subSpan *SubSpan) {
 	bucketEndTime := bucketTime.Add(trail.bucketSize)
 
 	// X: note index
@@ -460,20 +461,20 @@ func (trail *Trail) drawSubSpan(image *ebiten.Image, bucketTime time.Time, subSp
 	// start==bucketEndTime -> y=0, older (start < bucketEndTime) -> y>0
 	// start < bucketEndTime, no limit vs bucketTime
 	start := float32(math.Min(
-		bucketEndTime.Sub(subSpan.start).Seconds()*float64(trail.secondSize),
+		float64(bucketEndTime.Delta(subSpan.start).Beats())*float64(trail.secondSize),
 		float64(image.Bounds().Max.Y),
 	))
 	// end > bucketTime, no limit vs bucketEndTime
-	end := float32(math.Max(bucketEndTime.Sub(subSpan.end).Seconds()*float64(trail.secondSize), 0))
+	end := float32(math.Max(float64(bucketEndTime.Delta(subSpan.end).Beats())*float64(trail.secondSize), 0))
 
 	//log.Printf("Drawing: %v -> [%.1f : %.1f] in %v", span, start, end, imageBucketTime)
 
 	if start < 0 {
-		log.Printf("%v: start should be within bucket @%.1f: %.1f", subSpan, bucketTime.Sub(time.Now()).Seconds(), start)
+		log.Printf("%v: start should be within bucket @%.1f: %.1f", subSpan, bucketTime, start)
 		return
 	}
 	if end > float32(image.Bounds().Max.Y) {
-		log.Printf("%v: end should be within bucket @%.1f: %.1f", subSpan, bucketTime.Sub(time.Now()).Seconds(), end)
+		log.Printf("%v: end should be within bucket @%.1f: %.1f", subSpan, bucketTime, end)
 		return
 	}
 	if end > start {
@@ -499,26 +500,25 @@ func (trail *Trail) drawSubSpan(image *ebiten.Image, bucketTime time.Time, subSp
 type SubSpan struct {
 	span                 *Span
 	subindex, subindices int
-	start, end           time.Time
+	start, end           Time
 }
 
 func (s *SubSpan) String() string {
-	now := time.Now()
-	return fmt.Sprintf("%d/%d [%.2f:%.2f]", s.subindex, s.subindices, s.start.Sub(now).Seconds(), s.end.Sub(now).Seconds())
+	return fmt.Sprintf("%d/%d [%.2f:%.2f]", s.subindex, s.subindices, s.start, s.end)
 }
 
 func (s *SubSpan) Validate() error {
 	if s.end.After(s.span.end) {
-		return fmt.Errorf("end %dms after parent span %v", s.end.Sub(s.span.end).Milliseconds(), s.span)
+		return fmt.Errorf("end %.2f after parent span %v", s.end.Delta(s.span.end), s.span)
 	}
 	if s.end.Before(s.span.start) {
-		return fmt.Errorf("end %dms before start of parent span %v", s.span.start.Sub(s.end).Milliseconds(), s.span)
+		return fmt.Errorf("end %.2f before start of parent span %v", s.span.start.Delta(s.end), s.span)
 	}
 	if s.start.After(s.span.end) {
-		return fmt.Errorf("start %dms after end of parent span %v", s.end.Sub(s.span.start).Milliseconds(), s.span)
+		return fmt.Errorf("start %.2f after end of parent span %v", s.end.Delta(s.span.start), s.span)
 	}
 	if s.start.Before(s.span.start) {
-		return fmt.Errorf("start %dms before parent span %v", s.span.start.Sub(s.start).Milliseconds(), s.span)
+		return fmt.Errorf("start %.2f before parent span %v", s.span.start.Delta(s.start), s.span)
 	}
 	if s.subindices < 1 {
 		return fmt.Errorf("subindices %d < 1", s.subindices)
@@ -530,7 +530,7 @@ func (s *SubSpan) Validate() error {
 }
 
 type SpanEvent struct {
-	t     time.Time
+	t     Time
 	start bool
 	span  *Span
 }
@@ -551,7 +551,7 @@ func Subindex(spans []*Span) []*SubSpan {
 
 	subSpans := []*SubSpan{}
 	active := map[*Span]*SubSpan{}
-	var packTime time.Time
+	var packTime Time
 	for _, events := range byPos {
 		for i, event := range events {
 			hadActive := len(active)
@@ -602,7 +602,7 @@ func Subindex(spans []*Span) []*SubSpan {
 					newSubSpan := &SubSpan{
 						span: subSpan.span, start: packTime,
 						// This will be set right below
-						end: time.Time{}, subindex: 0, subindices: 0,
+						end: Time{}, subindex: 0, subindices: 0,
 					}
 					active[subSpan.span] = newSubSpan
 					subSpans = append(subSpans, newSubSpan)
@@ -614,7 +614,7 @@ func Subindex(spans []*Span) []*SubSpan {
 				subSpan.subindices = len(ordered)
 			}
 
-			packTime = time.Time{}
+			packTime = Time{}
 		}
 	}
 
@@ -628,7 +628,7 @@ func Subindex(spans []*Span) []*SubSpan {
 }
 
 // Produce a (cached) slice of the trail with spans.
-func (trail *Trail) getCached(ctxt context.Context, imageBucketTime time.Time) *ebiten.Image {
+func (trail *Trail) getCached(ctxt context.Context, imageBucketTime Time) *ebiten.Image {
 	defer trace.StartRegion(ctxt, "getCachedBucket").End()
 	trail.mu.Lock()
 	defer trail.mu.Unlock()

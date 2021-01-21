@@ -6,7 +6,6 @@ import (
 	"image/color"
 	"log"
 	"runtime/trace"
-	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
@@ -60,6 +59,8 @@ func (m *Mapper) Get(name string) int {
 }
 
 type Trosces struct {
+	pulse *Pulse
+
 	keyboard *Track
 	drums    *Track
 	layers   *Track
@@ -72,20 +73,22 @@ func NewTrosces() *Trosces {
 	trosces := &Trosces{
 		keyboard: &Track{
 			header: NewHeader(15, 30),
-			trail:  NewTrail(time.Second, 4*time.Second, 256, 15),
+			trail:  NewTrail(Beats(1), Beats(4), 256, 15),
 			mapper: NewMapper(),
 		},
 		drums: &Track{
 			header: NewHeader(30, 30),
-			trail:  NewTrail(time.Second, 4*time.Second, 256, 30),
+			trail:  NewTrail(Beats(1), Beats(4), 256, 30),
 			mapper: NewMapper(),
 		},
 		layers: &Track{
 			header: NewHeader(30, 30),
-			trail:  NewTrail(8*time.Second, 120*time.Second, 8, 30),
+			trail:  NewTrail(Beats(16), Beats(128), 8, 30),
 			mapper: NewMapper(),
 		},
 		variantMappers: map[int]*Mapper{},
+
+		pulse: NewPulse(120),
 	}
 	trosces.keyboard.header.keyboard = true
 	trosces.drums.header.borderWidth = 2
@@ -93,30 +96,33 @@ func NewTrosces() *Trosces {
 	trosces.layers.header.borderWidth = 2
 	trosces.layers.trail.borderWidth = 2
 
+	trosces.keyboard.trail.pulse = trosces.pulse
+	trosces.drums.trail.pulse = trosces.pulse
+	trosces.layers.trail.pulse = trosces.pulse
+
 	return trosces
 }
 
 // Events from OSC.
 
-func (trosces *Trosces) PlayNote(instrument string, note Note, duration time.Duration) {
+func (trosces *Trosces) PlayNote(instrument string, note Note, duration Duration) {
 	iNum := trosces.keyboard.mapper.Get(instrument)
-	if duration == 0 {
+	if duration.IsZero() {
 		// "forever"
-		duration = 24 * time.Hour
+		duration = Beats(2048)
 	}
 	trosces.keyboard.trail.Span(iNum, int(note), duration)
 }
 
-func (trosces *Trosces) PlayDrum(instrument string, duration time.Duration) {
+func (trosces *Trosces) PlayDrum(instrument string, duration Duration) {
 	iNum := trosces.drums.mapper.Get(instrument)
-	if duration == 0 {
-		// short hit
-		duration = time.Second / 8
+	if duration.IsZero() {
+		duration = Beats(1.0 / 8)
 	}
 	trosces.drums.trail.Span(iNum, iNum, duration)
 }
 
-func (trosces *Trosces) PlayLayer(name string, duration time.Duration, variant string) {
+func (trosces *Trosces) PlayLayer(name string, duration Duration, variant string) {
 	lNum := trosces.layers.mapper.Get(name)
 	if _, ok := trosces.variantMappers[lNum]; !ok {
 		trosces.variantMappers[lNum] = NewMapper()
@@ -126,7 +132,7 @@ func (trosces *Trosces) PlayLayer(name string, duration time.Duration, variant s
 }
 
 func (trosces *Trosces) Sync(bpm int) {
-	// TODO: unimplemented
+	trosces.pulse.Sync(float32(bpm))
 }
 
 // Implements ebiten.Game interface.
@@ -179,7 +185,7 @@ func (trosces *Trosces) Draw(screen *ebiten.Image) {
 
 	// TODO: Actually don't draw the extra pixels above!
 	path := vector.Path{}
-	line := trosces.keyboard.header.keyHeight + float32(trosces.keyboard.trail.length.Seconds())*trosces.keyboard.trail.secondSize
+	line := trosces.keyboard.header.keyHeight + trosces.keyboard.trail.length.Beats()*trosces.keyboard.trail.secondSize
 	path.MoveTo(0, line-256)
 	path.LineTo(float32(x), line-256)
 	path.LineTo(float32(x), line+256)

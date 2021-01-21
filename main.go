@@ -58,7 +58,7 @@ func main() {
 					trosces.keyboard.trail.Span(
 						rand.Intn(7),
 						note,
-						time.Duration(rand.Float32()*float32(time.Second)),
+						Beats(rand.Float32()*float32(time.Second)),
 					)
 				}
 				time.Sleep(time.Second / 60)
@@ -74,21 +74,21 @@ func main() {
 					for i := 0; i < 4; i++ {
 						go func() {
 							for i := 0; i < 2; i++ {
-								trosces.drums.trail.Span(0, 0, time.Second/16)
+								trosces.drums.trail.Span(0, 0, Beats(1.0/16))
 								time.Sleep(time.Second / 2)
 							}
 						}()
 						go func() {
 							time.Sleep(time.Second / 4)
-							trosces.drums.trail.Span(1, 1, time.Second/16)
+							trosces.drums.trail.Span(1, 1, Beats(1.0/16))
 							time.Sleep(time.Second / 2)
-							trosces.drums.trail.Span(1, 1, time.Second/16)
+							trosces.drums.trail.Span(1, 1, Beats(1.0/16))
 							time.Sleep(time.Second / 4 / 4 * 3)
-							trosces.drums.trail.Span(1, 1, time.Second/16)
+							trosces.drums.trail.Span(1, 1, Beats(1.0/16))
 						}()
 						go func() {
 							for i := 0; i < 8; i++ {
-								trosces.drums.trail.Span(2, 2, time.Second/16)
+								trosces.drums.trail.Span(2, 2, Beats(1.0/16))
 								time.Sleep(time.Second / 8)
 							}
 						}()
@@ -99,12 +99,12 @@ func main() {
 				// Layers
 				go func() {
 					if rand.Intn(4) == 0 {
-						trosces.layers.trail.Span(1, 0, 4*time.Second)
+						trosces.layers.trail.Span(1, 0, Beats(4))
 					} else {
-						trosces.layers.trail.Span(0, 0, 4*time.Second)
+						trosces.layers.trail.Span(0, 0, Beats(4))
 					}
 					if rand.Intn(4) == 0 {
-						trosces.layers.trail.Span(0, 1, 4*time.Second)
+						trosces.layers.trail.Span(0, 1, Beats(4))
 					}
 				}()
 

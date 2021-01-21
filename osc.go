@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"time"
 
 	"github.com/hypebeast/go-osc/osc"
 )
@@ -48,19 +47,19 @@ func NumberArg(arg interface{}) (int, error) {
 	}
 }
 
-func DurationArg(arg interface{}) (time.Duration, error) {
+func DurationArg(arg interface{}) (Duration, error) {
 	if f32, ok := arg.(float32); !ok {
 		if f64, ok := arg.(float64); !ok {
 			if i, err := NumberArg(arg); err != nil {
-				return 0, fmt.Errorf("not a number")
+				return Beats(0), fmt.Errorf("not a number")
 			} else {
-				return time.Duration(int64(i) * int64(time.Second)), nil
+				return Beats(float32(i)), nil
 			}
 		} else {
-			return time.Duration(f64 * float64(time.Second)), nil
+			return Beats(float32(f64)), nil
 		}
 	} else {
-		return time.Duration(f32 * float32(time.Second)), nil
+		return Beats(f32), nil
 	}
 }
 
@@ -77,7 +76,7 @@ func LaunchOSCServer(trosces *Trosces) {
 		var (
 			instrument string
 			note       Note
-			duration   time.Duration
+			duration   Duration
 		)
 
 		if instrument, err = NameArg(msg.Arguments[0]); err != nil {
@@ -109,7 +108,7 @@ func LaunchOSCServer(trosces *Trosces) {
 
 		var (
 			instrument string
-			duration   time.Duration
+			duration   Duration
 		)
 
 		if instrument, err = NameArg(msg.Arguments[0]); err != nil {
@@ -136,7 +135,7 @@ func LaunchOSCServer(trosces *Trosces) {
 
 		var (
 			name     string
-			duration time.Duration
+			duration Duration
 			variant  string
 		)
 

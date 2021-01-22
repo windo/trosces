@@ -99,6 +99,31 @@ func LaunchOSCServer(trosces *Trosces) {
 		trosces.PlayNote(instrument, note, duration)
 	})
 
+	d.AddMsgHandler("/stop", func(msg *osc.Message) {
+		var err error
+		if err = CheckArgs(msg.Arguments, 2, 2); err != nil {
+			log.Printf("Invalid /stop: %v", err)
+			return
+		}
+
+		var (
+			instrument string
+			note       Note
+		)
+
+		if instrument, err = NameArg(msg.Arguments[0]); err != nil {
+			log.Printf("Invalid /stop[0] instrument: %v", err)
+			return
+		}
+
+		if note, err = NoteArg(msg.Arguments[1]); err != nil {
+			log.Printf("Invalid /stop[1] note: %v", err)
+			return
+		}
+
+		trosces.StopNote(instrument, note)
+	})
+
 	d.AddMsgHandler("/drum", func(msg *osc.Message) {
 		var err error
 		if err = CheckArgs(msg.Arguments, 1, 2); err != nil {

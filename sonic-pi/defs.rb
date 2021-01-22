@@ -4,7 +4,12 @@ end
 
 define :trace_note do |instrument, note, duration=1.0|
   note_name = note_info(note).midi_string
-  trace_osc "/play", instrument.to_s, note_name, rt(duration.to_f)
+  trace_osc "/play", instrument.to_s, note_name, duration.to_f
+end
+
+define :trace_note_off do |instrument, note|
+  note_name = note_info(note).midi_string
+  trace_osc "/stop", instrument.to_s, note_name
 end
 
 define :trace_notes do |instrument, notes, duration=1.0|
@@ -14,11 +19,11 @@ define :trace_notes do |instrument, notes, duration=1.0|
 end
 
 define :trace_drum do |instrument, duration=0.125|
-  trace_osc "/drum", instrument.to_s, rt(duration.to_f)
+  trace_osc "/drum", instrument.to_s, duration.to_f
 end
 
 define :trace_layer do |layer, duration=4, variant=""|
-  trace_osc "/layer", layer.to_s, rt(duration.to_f), variant.to_s
+  trace_osc "/layer", layer.to_s, duration.to_f, variant.to_s
 end
 
 define :trace_sync do |bpm|

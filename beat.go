@@ -39,6 +39,10 @@ func Beats(beats float32) Duration {
 	return Duration{beats: beats}
 }
 
+func Forever() Duration {
+	return Duration{beats: float32(math.Inf(1))}
+}
+
 func (d Duration) Beats() float32 {
 	return d.beats
 }

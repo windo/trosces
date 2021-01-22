@@ -69,3 +69,9 @@ As above, but span is inserted to the pad track.
 Similar to above, but duration is a required argument. Additionally, a
 "variant" can be specified for the layer that will be drawn in a different
 color.
+
+### Stop
+
+`/stop <instrument: string> <note: string>`
+
+End a currently playing note on the MIDI track (stop a long note).

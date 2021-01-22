@@ -108,10 +108,14 @@ func NewTrosces() *Trosces {
 func (trosces *Trosces) PlayNote(instrument string, note Note, duration Duration) {
 	iNum := trosces.keyboard.mapper.Get(instrument)
 	if duration.IsZero() {
-		// "forever"
-		duration = Beats(2048)
+		duration = Forever()
 	}
 	trosces.keyboard.trail.Span(iNum, int(note), duration)
+}
+
+func (trosces *Trosces) StopNote(instrument string, note Note) {
+	iNum := trosces.keyboard.mapper.Get(instrument)
+	trosces.keyboard.trail.Stop(iNum, int(note))
 }
 
 func (trosces *Trosces) PlayDrum(instrument string, duration Duration) {

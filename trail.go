@@ -116,7 +116,7 @@ type Trail struct {
 	gridReady   bool
 	unused      []*ebiten.Image
 
-	secondSize float32
+	beatSize   float32
 	bpm        float32
 	gridSteps  int
 	length     Duration
@@ -130,7 +130,7 @@ type Trail struct {
 	mu sync.Mutex
 }
 
-func NewTrail(bucketSize Duration, length Duration, secondSize float32, posWidth float32) *Trail {
+func NewTrail(bucketSize Duration, length Duration, beatSize float32, posWidth float32) *Trail {
 	log.Printf("New trail")
 	trail := Trail{
 		buckets: map[Time]*SpanBucket{},
@@ -142,7 +142,7 @@ func NewTrail(bucketSize Duration, length Duration, secondSize float32, posWidth
 		minPos: 0,
 		maxPos: 0,
 
-		secondSize:  secondSize,
+		beatSize:    beatSize,
 		bucketSize:  bucketSize,
 		length:      length,
 		borderWidth: 1,
@@ -240,8 +240,20 @@ func (trail *Trail) SetGridSteps(steps int) {
 	trail.mu.Lock()
 	defer trail.mu.Unlock()
 
-	trail.gridSteps = steps
-	trail.redrawAll()
+	if trail.gridSteps != steps {
+		trail.gridSteps = steps
+		trail.redrawAll()
+	}
+}
+
+func (trail *Trail) SetBeatSize(beatSize float32) {
+	trail.mu.Lock()
+	defer trail.mu.Unlock()
+
+	if trail.beatSize != beatSize {
+		trail.beatSize = beatSize
+		trail.resetAll()
+	}
 }
 
 func (trail *Trail) ActivePos() []int {
@@ -273,7 +285,7 @@ func (trail *Trail) ActivePos() []int {
 // Draw all the trail components.
 func (trail *Trail) Draw(ctxt context.Context, image *ebiten.Image, op *ebiten.DrawImageOptions) {
 	defer trace.StartRegion(ctxt, "DrawTrail").End()
-	now := trail.pulse.Now()
+	now := trail.pulse.Horizon()
 
 	// History (time < now) flows away from 0.
 
@@ -283,12 +295,12 @@ func (trail *Trail) Draw(ctxt context.Context, image *ebiten.Image, op *ebiten.D
 	trailEnd := now.Sub(trail.length)
 
 	// Until we find a bucket that covers the end of the trail
-	for bucketTime.After(trailEnd) {
+	for bucketTime.Add(trail.bucketSize).After(trailEnd) {
 		bucketOp := ebiten.DrawImageOptions{}
 		bucketOp.GeoM = op.GeoM
 		// bucket images contain [bucketTime+bucketSize (fresher edge, y=0) ... bucketTime (older edge, y>0)]
 		// now -> on screen y=0, future -> on screen y<0
-		offset := now.Delta(bucketTime.Add(trail.bucketSize)).Beats() * trail.secondSize
+		offset := now.Delta(bucketTime.Add(trail.bucketSize)).Beats() * trail.beatSize
 		bucketOp.GeoM.Translate(0, float64(offset))
 		image.DrawImage(trail.getCached(ctxt, bucketTime), &bucketOp)
 		// move to one older bucket
@@ -349,7 +361,7 @@ func (trail *Trail) allocateImage() *ebiten.Image {
 	log.Printf("Creating new image")
 	return ebiten.NewImage(
 		int(trail.posWidth*float32(trail.maxPos-trail.minPos+1)),
-		int(trail.bucketSize.Beats()*trail.secondSize),
+		int(trail.bucketSize.Beats()*trail.beatSize),
 	)
 }
 
@@ -359,7 +371,7 @@ func (trail *Trail) cleanup() {
 	defer task.End()
 	log.Printf("Starting cleanup")
 
-	now := trail.pulse.Now()
+	now := trail.pulse.Horizon()
 
 	trail.mu.Lock()
 	defer trail.mu.Unlock()
@@ -426,7 +438,7 @@ func (trail *Trail) getGrid(ctxt context.Context) *ebiten.Image {
 
 		// Timeline
 		for t := float32(0); t < trail.bucketSize.Beats(); t += trail.bucketSize.Beats() / float32(trail.gridSteps) {
-			baseTime := t * trail.secondSize
+			baseTime := t * trail.beatSize
 
 			path := vector.Path{}
 			path.MoveTo(0, baseTime)
@@ -462,11 +474,11 @@ func (trail *Trail) drawSubSpan(image *ebiten.Image, bucketTime Time, subSpan *S
 	// start==bucketEndTime -> y=0, older (start < bucketEndTime) -> y>0
 	// start < bucketEndTime, no limit vs bucketTime
 	start := float32(math.Min(
-		float64(bucketEndTime.Delta(subSpan.start).Beats())*float64(trail.secondSize),
+		float64(bucketEndTime.Delta(subSpan.start).Beats())*float64(trail.beatSize),
 		float64(image.Bounds().Max.Y),
 	))
 	// end > bucketTime, no limit vs bucketEndTime
-	end := float32(math.Max(float64(bucketEndTime.Delta(subSpan.end).Beats())*float64(trail.secondSize), 0))
+	end := float32(math.Max(float64(bucketEndTime.Delta(subSpan.end).Beats())*float64(trail.beatSize), 0))
 
 	//log.Printf("Drawing: %v -> [%.1f : %.1f] in %v", span, start, end, imageBucketTime)
 

@@ -6,8 +6,9 @@ import (
 )
 
 type Pulse struct {
-	epoch time.Time
-	bpm   float32
+	epoch  time.Time
+	frozen Time
+	bpm    float32
 }
 
 func NewPulse(bpm float32) *Pulse {
@@ -17,10 +18,29 @@ func NewPulse(bpm float32) *Pulse {
 	}
 }
 
+// Current beat time.
 func (p *Pulse) Now() Time {
 	return Time{beat: float32(time.Now().Sub(p.epoch).Minutes()) * p.bpm}
 }
 
+func (p *Pulse) ToggleFrozen() {
+	if p.frozen.IsZero() {
+		p.frozen = p.Now()
+	} else {
+		p.frozen = Time{}
+	}
+}
+
+// Current (potentially frozen) time.
+func (p *Pulse) Horizon() Time {
+	if p.frozen.IsZero() {
+		return p.Now()
+	} else {
+		return p.frozen
+	}
+}
+
+// Update BPM and adjust epoch to the beat happening right this instant.
 func (p *Pulse) Sync(bpm float32) {
 	// Current logical beat
 	oldBeat := p.Now().Delta(Time{}).Beats()

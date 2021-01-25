@@ -73,12 +73,12 @@ func NewTrosces() *Trosces {
 	trosces := &Trosces{
 		keyboard: &Track{
 			header: NewHeader(15, 30),
-			trail:  NewTrail(Beats(1), Beats(4), 256, 15),
+			trail:  NewTrail(Beats(1), Beats(4), 192, 15),
 			mapper: NewMapper(),
 		},
 		drums: &Track{
 			header: NewHeader(30, 30),
-			trail:  NewTrail(Beats(1), Beats(4), 256, 30),
+			trail:  NewTrail(Beats(1), Beats(4), 192, 30),
 			mapper: NewMapper(),
 		},
 		layers: &Track{
@@ -160,6 +160,11 @@ func (trosces *Trosces) Update() error {
 		trosces.drums.trail.SetGridSteps(4)
 	}
 
+	// Freeze
+	if inpututil.IsKeyJustPressed(ebiten.KeySpace) {
+		trosces.pulse.ToggleFrozen()
+	}
+
 	// Maybe finish.
 	if inpututil.IsKeyJustPressed(ebiten.KeyQ) || inpututil.IsKeyJustPressed(ebiten.KeyEscape) {
 		return Finished
@@ -189,14 +194,18 @@ func (trosces *Trosces) Draw(screen *ebiten.Image) {
 
 	// TODO: Actually don't draw the extra pixels above!
 	path := vector.Path{}
-	line := trosces.keyboard.header.keyHeight + trosces.keyboard.trail.length.Beats()*trosces.keyboard.trail.secondSize
-	path.MoveTo(0, line-256)
-	path.LineTo(float32(x), line-256)
+	line := trosces.keyboard.header.keyHeight + trosces.keyboard.trail.length.Beats()*trosces.keyboard.trail.beatSize
+	path.MoveTo(0, line)
+	path.LineTo(float32(x), line)
 	path.LineTo(float32(x), line+256)
 	path.LineTo(0, line+256)
 	path.Fill(screen, &vector.FillOptions{Color: color.Black})
 }
 
 func (trosces *Trosces) Layout(outsideWidth, outsideHeight int) (int, int) {
+	height := float32(outsideHeight) - trosces.keyboard.header.keyHeight
+	trosces.keyboard.trail.SetBeatSize(height / 4)
+	trosces.drums.trail.SetBeatSize(height / 4)
+	trosces.layers.trail.SetBeatSize(height / 128)
 	return outsideWidth, outsideHeight
 }

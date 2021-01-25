@@ -470,6 +470,13 @@ func (trail *Trail) drawSubSpan(image *ebiten.Image, bucketTime Time, subSpan *S
 	baseOffset := float32(subSpan.span.pos-trail.minPos) * trail.posWidth
 	subWidth := (trail.posWidth - 2*trail.borderWidth) / float32(subSpan.subindices)
 	offset := baseOffset + trail.borderWidth + float32(subSpan.subindex)*subWidth
+	endOffset := offset + subWidth
+	if subSpan.subindex != 0 {
+		offset += trail.borderWidth / 2
+	}
+	if subSpan.subindex != subSpan.subindices-1 {
+		endOffset -= trail.borderWidth / 2
+	}
 
 	// start==bucketEndTime -> y=0, older (start < bucketEndTime) -> y>0
 	// start < bucketEndTime, no limit vs bucketTime
@@ -479,6 +486,13 @@ func (trail *Trail) drawSubSpan(image *ebiten.Image, bucketTime Time, subSpan *S
 	))
 	// end > bucketTime, no limit vs bucketEndTime
 	end := float32(math.Max(float64(bucketEndTime.Delta(subSpan.end).Beats())*float64(trail.beatSize), 0))
+
+	if subSpan.start.Same(subSpan.span.start) {
+		start -= trail.borderWidth
+	}
+	if subSpan.end.Same(subSpan.span.end) {
+		end += trail.borderWidth
+	}
 
 	//log.Printf("Drawing: %v -> [%.1f : %.1f] in %v", span, start, end, imageBucketTime)
 
@@ -502,8 +516,8 @@ func (trail *Trail) drawSubSpan(image *ebiten.Image, bucketTime Time, subSpan *S
 	path := vector.Path{}
 	path.MoveTo(offset, start)
 	path.LineTo(offset, end)
-	path.LineTo(offset+subWidth, end)
-	path.LineTo(offset+subWidth, start)
+	path.LineTo(endOffset, end)
+	path.LineTo(endOffset, start)
 	op := vector.FillOptions{
 		Color: spanPalette[subSpan.span.id],
 	}
@@ -598,7 +612,7 @@ func Subindex(spans []*Span) []*SubSpan {
 				continue
 			}
 
-			// Order current active
+			// Order and index current active subspans
 			ordered := make([]*SubSpan, len(active))
 			i := 0
 			for _, subSpan := range active {

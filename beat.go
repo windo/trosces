@@ -71,6 +71,10 @@ func (d Duration) IsZero() bool {
 	return d.beats == 0
 }
 
+func (d Duration) VisuallyZero() bool {
+	return math.Abs(float64(d.beats)) < float64(VisualSlack.beats)
+}
+
 type Time struct {
 	beat float32
 }
@@ -85,6 +89,14 @@ func (b Time) Before(other Time) bool {
 
 func (b Time) IsZero() bool {
 	return b.beat == 0
+}
+
+func (b Time) VisuallyClose(other Time) bool {
+	return other.Delta(b).VisuallyZero()
+}
+
+func (b Time) Same(other Time) bool {
+	return other.Delta(b).IsZero()
 }
 
 func (b Time) Add(d Duration) Time {

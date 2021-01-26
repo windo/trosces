@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"math"
 	"time"
 )
@@ -55,6 +56,10 @@ type Duration struct {
 	beats float32
 }
 
+func (d Duration) String() string {
+	return fmt.Sprintf("beats=%.2f", d.beats)
+}
+
 func Beats(beats float32) Duration {
 	return Duration{beats: beats}
 }
@@ -77,6 +82,14 @@ func (d Duration) VisuallyZero() bool {
 
 type Time struct {
 	beat float32
+}
+
+func (b Time) String() string {
+	return fmt.Sprintf("beat=%.2f", b.beat)
+}
+
+func OnBeat(beat float32) Time {
+	return Time{beat: beat}
 }
 
 func (b Time) After(other Time) bool {

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"image/color"
 	"log"
-	"math"
 	"runtime/trace"
 	"sort"
 	"sync"
@@ -15,7 +14,7 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/vector"
 )
 
-var VisualSlack Duration = Duration{beats: 0.01}
+var VisualSlack Duration = Duration{beats: 1e-3}
 
 type Span struct {
 	// "Instrument" or other category ID (for the same position)
@@ -302,7 +301,7 @@ func (trail *Trail) Draw(ctxt context.Context, image *ebiten.Image, op *ebiten.D
 		// now -> on screen y=0, future -> on screen y<0
 		offset := now.Delta(bucketTime.Add(trail.bucketSize)).Beats() * trail.beatSize
 		bucketOp.GeoM.Translate(0, float64(offset))
-		image.DrawImage(trail.getCached(ctxt, bucketTime), &bucketOp)
+		image.DrawImage(trail.getCachedBucket(ctxt, bucketTime), &bucketOp)
 		// move to one older bucket
 		bucketTime = bucketTime.Sub(trail.bucketSize)
 	}
@@ -405,7 +404,7 @@ func (trail *Trail) cleanup() {
 }
 
 // Produce a (cached) grid for trail background.
-func (trail *Trail) getGrid(ctxt context.Context) *ebiten.Image {
+func (trail *Trail) getCachedGrid(ctxt context.Context) *ebiten.Image {
 	defer trace.StartRegion(ctxt, "getCachedGrid").End()
 	// mu must be taken
 	if !trail.gridReady {
@@ -463,7 +462,7 @@ func (trail *Trail) getGrid(ctxt context.Context) *ebiten.Image {
 	return trail.grid
 }
 
-func (trail *Trail) drawSubSpan(image *ebiten.Image, bucketTime Time, subSpan *SubSpan) {
+func (trail *Trail) subSpanBounds(bucketTime Time, subSpan *SubSpan) (float32, float32, float32, float32) {
 	bucketEndTime := bucketTime.Add(trail.bucketSize)
 
 	// X: note index
@@ -478,21 +477,39 @@ func (trail *Trail) drawSubSpan(image *ebiten.Image, bucketTime Time, subSpan *S
 		endOffset -= trail.borderWidth / 2
 	}
 
+	// TODO: glitches with gaps on the bucket boundary
+
 	// start==bucketEndTime -> y=0, older (start < bucketEndTime) -> y>0
 	// start < bucketEndTime, no limit vs bucketTime
-	start := float32(math.Min(
-		float64(bucketEndTime.Delta(subSpan.start).Beats())*float64(trail.beatSize),
-		float64(image.Bounds().Max.Y),
-	))
+	start := bucketEndTime.Delta(subSpan.start).Beats() * trail.beatSize
+	if start > trail.bucketSize.Beats()*trail.beatSize {
+		start = trail.bucketSize.Beats() * trail.beatSize
+		subSpan.first = false
+	}
 	// end > bucketTime, no limit vs bucketEndTime
-	end := float32(math.Max(float64(bucketEndTime.Delta(subSpan.end).Beats())*float64(trail.beatSize), 0))
+	end := bucketEndTime.Delta(subSpan.end).Beats() * trail.beatSize
+	if end < 0 {
+		end = 0
+		subSpan.last = false
+	}
 
-	if subSpan.start.Same(subSpan.span.start) {
-		start -= trail.borderWidth
+	if start-end < 1 {
+		end = start - 1
 	}
-	if subSpan.end.Same(subSpan.span.end) {
-		end += trail.borderWidth
+	if start-end-2*trail.borderWidth > 1 {
+		// Add start and end borders
+		if subSpan.first {
+			start -= trail.borderWidth
+		}
+		if subSpan.last {
+			end += trail.borderWidth
+		}
 	}
+	return start, end, offset, endOffset
+}
+
+func (trail *Trail) drawSubSpan(image *ebiten.Image, bucketTime Time, subSpan *SubSpan) {
+	start, end, offset, endOffset := trail.subSpanBounds(bucketTime, subSpan)
 
 	//log.Printf("Drawing: %v -> [%.1f : %.1f] in %v", span, start, end, imageBucketTime)
 
@@ -528,6 +545,7 @@ type SubSpan struct {
 	span                 *Span
 	subindex, subindices int
 	start, end           Time
+	first, last          bool
 }
 
 func (s *SubSpan) String() string {
@@ -585,7 +603,8 @@ func Subindex(spans []*Span) []*SubSpan {
 
 			if event.start {
 				active[event.span] = &SubSpan{
-					span: event.span, start: event.span.start,
+					first: true,
+					span:  event.span, start: event.span.start,
 					// This will be overwritten later
 					end: event.span.end,
 					// These may be updated as needed
@@ -594,6 +613,7 @@ func Subindex(spans []*Span) []*SubSpan {
 				subSpans = append(subSpans, active[event.span])
 			} else {
 				active[event.span].end = event.t
+				active[event.span].last = true
 				delete(active, event.span)
 			}
 
@@ -624,7 +644,7 @@ func Subindex(spans []*Span) []*SubSpan {
 				// If changing an existing span, need to create a cut point here
 				if subSpan.start.Before(packTime) {
 					// Finish previous subspan
-					subSpan.end = packTime
+					subSpan.end = event.t
 					// Start a new one
 					newSubSpan := &SubSpan{
 						span: subSpan.span, start: packTime,
@@ -655,7 +675,7 @@ func Subindex(spans []*Span) []*SubSpan {
 }
 
 // Produce a (cached) slice of the trail with spans.
-func (trail *Trail) getCached(ctxt context.Context, imageBucketTime Time) *ebiten.Image {
+func (trail *Trail) getCachedBucket(ctxt context.Context, imageBucketTime Time) *ebiten.Image {
 	defer trace.StartRegion(ctxt, "getCachedBucket").End()
 	trail.mu.Lock()
 	defer trail.mu.Unlock()
@@ -668,7 +688,7 @@ func (trail *Trail) getCached(ctxt context.Context, imageBucketTime Time) *ebite
 
 		var spans []*Span
 		imageBucketEndTime := imageBucketTime.Add(trail.bucketSize)
-		image.DrawImage(trail.getGrid(ctxt), &ebiten.DrawImageOptions{})
+		image.DrawImage(trail.getCachedGrid(ctxt), &ebiten.DrawImageOptions{})
 
 		for _, bucket := range trail.buckets {
 			if err := bucket.Validate(); err != nil {

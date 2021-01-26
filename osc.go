@@ -124,6 +124,11 @@ func LaunchOSCServer(trosces *Trosces) {
 		trosces.StopNote(instrument, note)
 	})
 
+	d.AddMsgHandler("/highlight", func(msg *osc.Message) {
+		// TODO: highlight notes (eg: scale being used)
+		log.Printf("/highlight unimplemented")
+	})
+
 	d.AddMsgHandler("/drum", func(msg *osc.Message) {
 		var err error
 		if err = CheckArgs(msg.Arguments, 1, 2); err != nil {
@@ -149,6 +154,11 @@ func LaunchOSCServer(trosces *Trosces) {
 		}
 
 		trosces.PlayDrum(instrument, duration)
+	})
+
+	d.AddMsgHandler("/automation", func(msg *osc.Message) {
+		// TODO: plot automation values
+		log.Printf("/automation unimplemented")
 	})
 
 	d.AddMsgHandler("/layer", func(msg *osc.Message) {

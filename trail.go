@@ -422,17 +422,29 @@ func (trail *Trail) getCachedGrid(ctxt context.Context) *ebiten.Image {
 			path.LineTo(float32(basePos+1)*trail.posWidth, float32(trail.grid.Bounds().Max.Y))
 			path.LineTo(float32(basePos+1)*trail.posWidth, 0)
 
-			var op vector.FillOptions
-			switch {
-			case pos%12 == 0:
-				op.Color = color.RGBA{0x30, 0x30, 0x30, 0xff}
-			case Note(pos).IsWhite():
-				op.Color = color.RGBA{0x20, 0x20, 0x20, 0xff}
-			default:
-				op.Color = color.RGBA{0x10, 0x10, 0x10, 0xff}
+			var (
+				op   vector.FillOptions
+				grey uint8
+			)
+			if Note(pos).IsWhite() {
+				grey = 0x20
+			} else {
+				grey = 0x10
+			}
+			op.Color = color.RGBA{grey, grey, grey, 0xff}
+			path.Fill(trail.grid, &op)
+
+			if pos%12 == 0 {
+				path = vector.Path{}
+				path.MoveTo(float32(basePos)*trail.posWidth, 0)
+				path.LineTo(float32(basePos)*trail.posWidth, float32(trail.grid.Bounds().Max.Y))
+				path.LineTo(float32(basePos)*trail.posWidth+trail.borderWidth, float32(trail.grid.Bounds().Max.Y))
+				path.LineTo(float32(basePos)*trail.posWidth+trail.borderWidth, 0)
+				grey = 0x40
+				op.Color = color.RGBA{grey, grey, grey, 0xff}
+				path.Fill(trail.grid, &op)
 			}
 
-			path.Fill(trail.grid, &op)
 		}
 
 		// Timeline

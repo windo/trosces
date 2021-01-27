@@ -4,6 +4,7 @@ live_loop :conductor do
   # Switch between scales
   if get(:scale) == nil or one_in(4) then
     set :scale, [[:c, :major], [:c, :minor], [:c, :mixolydian]].choose
+    trace_highlight scale(*get(:scale), num_octaves: 4)-12
   end
   trace_layer :scale, 4, get(:scale)
 
@@ -32,7 +33,7 @@ live_loop :chords do
   at line(0, 1, steps: 4) do
     b = [0, 1, 3].choose
     c = [0, 2, 4, 6].map { |i| notes[b + i] }
-    trace_notes :chord, c, 0.25
+    trace_note :chord, c, 0.25
     play c, release: 0.25
   end
 end

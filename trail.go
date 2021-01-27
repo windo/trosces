@@ -103,29 +103,37 @@ func (bucket *SpanBucket) Validate() error {
 type Trail struct {
 	// Spans bucketed by periods of duration `bucketSize`
 	buckets map[Time]*SpanBucket
+	// Currently active spans
+	activeSpans []*Span
+	// range
+	minPos    int
+	maxPos    int
+	highlight map[int]struct{}
 
-	minPos int
-	maxPos int
-	active []*Span
-
-	// Images of spans from [time : time + bucketSize]
-	cached      map[Time]*ebiten.Image
+	// Images tracking
+	// all spans slotted by time buckets
+	cached map[Time]*ebiten.Image
+	// whether the image above is ready or needs a redraw
 	cachedReady map[Time]bool
-	grid        *ebiten.Image
-	gridReady   bool
-	unused      []*ebiten.Image
+	// as above, but for the background grid
+	grid      *ebiten.Image
+	gridReady bool
+	// discarded images ready for reuse
+	unused []*ebiten.Image
 
-	beatSize   float32
-	bpm        float32
-	gridSteps  int
-	length     Duration
-	bucketSize Duration
-
+	// Dimensions of the trail
+	beatSize    float32
+	bpm         float32
+	gridSteps   int
+	length      Duration
+	bucketSize  Duration
 	posWidth    float32
 	borderWidth float32
 
+	// Timekeeping
 	pulse *Pulse
 
+	// Needs to be held
 	mu sync.Mutex
 }
 
@@ -133,22 +141,22 @@ func NewTrail(bucketSize Duration, length Duration, beatSize float32, posWidth f
 	log.Printf("New trail")
 	trail := Trail{
 		buckets: map[Time]*SpanBucket{},
+		minPos:  0,
+		maxPos:  0,
 
 		cached:      map[Time]*ebiten.Image{},
 		cachedReady: map[Time]bool{},
 		unused:      []*ebiten.Image{},
 
-		minPos: 0,
-		maxPos: 0,
-
 		beatSize:    beatSize,
 		bucketSize:  bucketSize,
 		length:      length,
-		borderWidth: 1,
+		borderWidth: 2,
 		posWidth:    posWidth,
 		gridSteps:   4,
 	}
 
+	// Spawn a cleanup goroutine
 	go func() {
 		ticker := time.NewTicker(5 * time.Second)
 		for {
@@ -166,8 +174,7 @@ func (trail *Trail) Span(id int, pos int, d Duration) {
 	bucketTime := now.Truncate(trail.bucketSize)
 
 	if id >= len(spanPalette) {
-		log.Printf("Instrument ID %d too big, wrapping around", id)
-		id %= len(spanPalette)
+		log.Printf("Instrument ID %d too big, will wrap around!", id)
 	}
 
 	trail.mu.Lock()
@@ -209,11 +216,11 @@ func (trail *Trail) Span(id int, pos int, d Duration) {
 
 	// Invalidate cached bucket image
 	trail.redrawBucket(bucketTime)
+	// Track the span
 	bucket.spans = append(bucket.spans, span)
-	trail.active = append(trail.active, span)
+	trail.activeSpans = append(trail.activeSpans, span)
 }
 
-// TODO: Unused as of now
 func (trail *Trail) Stop(id int, pos int) {
 	defer trace.StartRegion(context.Background(), "StopSpan").End()
 	now := trail.pulse.Now()
@@ -264,11 +271,11 @@ func (trail *Trail) ActivePos() []int {
 	active := []int{}
 
 	i := 0
-	for i < len(trail.active) {
-		span := trail.active[i]
+	for i < len(trail.activeSpans) {
+		span := trail.activeSpans[i]
 		if !span.InRange(now, now) {
-			// TODO: Only place where cleanup of trail.active happens!
-			trail.active = append(trail.active[:i], trail.active[i+1:]...)
+			// TODO: Only place where cleanup of trail.activeSpans happens!
+			trail.activeSpans = append(trail.activeSpans[:i], trail.activeSpans[i+1:]...)
 			continue
 		}
 		if _, ok := activeMap[span.pos]; !ok {
@@ -279,6 +286,17 @@ func (trail *Trail) ActivePos() []int {
 	}
 	sort.Ints(active)
 	return active
+}
+
+func (trail *Trail) SetHighlight(highlight []int) {
+	trail.mu.Lock()
+	defer trail.mu.Unlock()
+
+	trail.highlight = make(map[int]struct{}, len(highlight))
+	for _, pos := range highlight {
+		trail.highlight[pos] = struct{}{}
+	}
+	trail.redrawAll()
 }
 
 // Draw all the trail components.
@@ -415,34 +433,39 @@ func (trail *Trail) getCachedGrid(ctxt context.Context) *ebiten.Image {
 		// Key columns
 		for pos := trail.minPos; pos <= trail.maxPos; pos++ {
 			basePos := pos - trail.minPos
+			var grey uint8
 
-			path := vector.Path{}
-			path.MoveTo(float32(basePos)*trail.posWidth, 0)
-			path.LineTo(float32(basePos)*trail.posWidth, float32(trail.grid.Bounds().Max.Y))
-			path.LineTo(float32(basePos+1)*trail.posWidth, float32(trail.grid.Bounds().Max.Y))
-			path.LineTo(float32(basePos+1)*trail.posWidth, 0)
-
-			var (
-				op   vector.FillOptions
-				grey uint8
-			)
-			if Note(pos).IsWhite() {
-				grey = 0x20
-			} else {
-				grey = 0x10
+			drawBar := func(offset, endOffset float32, grey uint8) {
+				path := vector.Path{}
+				path.MoveTo(float32(basePos)*trail.posWidth+offset, 0)
+				path.LineTo(float32(basePos)*trail.posWidth+offset, float32(trail.grid.Bounds().Max.Y))
+				path.LineTo(float32(basePos)*trail.posWidth+endOffset, float32(trail.grid.Bounds().Max.Y))
+				path.LineTo(float32(basePos)*trail.posWidth+endOffset, 0)
+				path.Fill(trail.grid, &vector.FillOptions{Color: color.RGBA{grey, grey, grey, 0xff}})
 			}
-			op.Color = color.RGBA{grey, grey, grey, 0xff}
-			path.Fill(trail.grid, &op)
+
+			drawBar(0, trail.posWidth, 0x00)
+			var highlight bool
+			_, highlight = trail.highlight[pos]
+			hlExist := len(trail.highlight) > 0
+
+			if Note(pos).IsWhite() {
+				if highlight || !hlExist {
+					grey = 0x30
+				} else {
+					grey = 0x0
+				}
+			} else {
+				if highlight || !hlExist {
+					grey = 0x20
+				} else {
+					grey = 0x0
+				}
+			}
+			drawBar(trail.borderWidth/2, trail.posWidth-trail.borderWidth/2, grey)
 
 			if pos%12 == 0 {
-				path = vector.Path{}
-				path.MoveTo(float32(basePos)*trail.posWidth, 0)
-				path.LineTo(float32(basePos)*trail.posWidth, float32(trail.grid.Bounds().Max.Y))
-				path.LineTo(float32(basePos)*trail.posWidth+trail.borderWidth, float32(trail.grid.Bounds().Max.Y))
-				path.LineTo(float32(basePos)*trail.posWidth+trail.borderWidth, 0)
-				grey = 0x40
-				op.Color = color.RGBA{grey, grey, grey, 0xff}
-				path.Fill(trail.grid, &op)
+				drawBar(-trail.borderWidth/2, trail.borderWidth/2, 0x80)
 			}
 
 		}
@@ -547,10 +570,9 @@ func (trail *Trail) drawSubSpan(image *ebiten.Image, bucketTime Time, subSpan *S
 	path.LineTo(offset, end)
 	path.LineTo(endOffset, end)
 	path.LineTo(endOffset, start)
-	op := vector.FillOptions{
-		Color: spanPalette[subSpan.span.id],
-	}
-	path.Fill(image, &op)
+	path.Fill(image, &vector.FillOptions{
+		Color: spanPalette[subSpan.span.id%len(spanPalette)],
+	})
 }
 
 type SubSpan struct {

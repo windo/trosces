@@ -75,3 +75,10 @@ color.
 `/stop <instrument: string> <note: string>`
 
 End a currently playing note on the MIDI track (stop a long note).
+
+### Highlight
+
+`/highlight <note: string>*`
+
+Highlight the list of notes on the MIDI track as a being important. Send an
+empty highlight message to clear highlight.

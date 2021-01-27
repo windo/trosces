@@ -21,6 +21,10 @@ type Track struct {
 func (track *Track) Resolve() {
 	track.header.SetRange(track.trail.minPos, track.trail.maxPos)
 	track.header.SetActive(track.trail.ActivePos())
+	updatedHighlight := track.header.GetUpdatedHighlight()
+	if updatedHighlight != nil {
+		track.trail.SetHighlight(updatedHighlight)
+	}
 }
 
 func (track *Track) Draw(ctx context.Context, image *ebiten.Image, op *ebiten.DrawImageOptions) {
@@ -111,6 +115,10 @@ func (trosces *Trosces) PlayNote(instrument string, note Note, duration Duration
 		duration = Forever()
 	}
 	trosces.keyboard.trail.Span(iNum, int(note), duration)
+}
+
+func (trosces *Trosces) SetHighlight(notes []int) {
+	trosces.keyboard.header.SetHighlight(notes)
 }
 
 func (trosces *Trosces) StopNote(instrument string, note Note) {

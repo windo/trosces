@@ -125,8 +125,17 @@ func LaunchOSCServer(trosces *Trosces) {
 	})
 
 	d.AddMsgHandler("/highlight", func(msg *osc.Message) {
-		// TODO: highlight notes (eg: scale being used)
-		log.Printf("/highlight unimplemented")
+		var notes []int
+		for i, arg := range msg.Arguments {
+			if note, err := NoteArg(arg); err != nil {
+				log.Printf("Invalid /highlight[%d] note: %v", i, err)
+				return
+			} else {
+				notes = append(notes, int(note))
+			}
+		}
+
+		trosces.SetHighlight(notes)
 	})
 
 	d.AddMsgHandler("/drum", func(msg *osc.Message) {

@@ -2,9 +2,22 @@ define :trace_osc do |path, *args, **kwargs|
   osc_send "127.0.0.1", 8765, path, *args, **kwargs
 end
 
-define :trace_note do |instrument, note, duration=1.0|
+define :trace_single_note do |instrument, note, duration=1.0|
   note_name = note_info(note).midi_string
   trace_osc "/play", instrument.to_s, note_name, duration.to_f
+end
+
+define :trace_note do |instrument, notes, duration=1.0|
+  case
+  when notes.kind_of?(ring().class)
+  when notes.kind_of?(Array)
+  else
+    notes = [notes]
+  end
+
+  notes.each do |n|
+    trace_single_note instrument, n, duration
+  end
 end
 
 define :trace_note_off do |instrument, note|
@@ -12,10 +25,16 @@ define :trace_note_off do |instrument, note|
   trace_osc "/stop", instrument.to_s, note_name
 end
 
-define :trace_notes do |instrument, notes, duration=1.0|
-  notes.each do |n|
-    trace_note instrument, n, duration
+define :trace_highlight do |notes|
+  case
+  when notes.kind_of?(ring().class)
+  when notes.kind_of?(Array)
+  else
+    # Single note
+    notes = [notes]
   end
+
+  trace_osc "/highlight", *notes.map { |n| note_info(n).midi_string }
 end
 
 define :trace_drum do |instrument, duration=0.125|
